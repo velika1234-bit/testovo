@@ -603,41 +603,7 @@ window.openLiveHost = async () => {
     sessionID = await createUniqueSessionPin();
     sessionDocId = sessionID;
     window.switchScreen('live-host');
-    window.openLiveHost = async () => {
-    if (!user) return;
-
-    sessionID = await createUniqueSessionPin();
-    sessionDocId = sessionID;
-    window.switchScreen('live-host');
-    
-    // БЕЗОПАСНО задаване на PIN кода
-    const pinElement = document.getElementById('session-code-display');
-    if (pinElement) {
-        pinElement.innerText = sessionID;
-    } else {
-        console.warn('Element with id "session-code-display" not found');
-    }
-
-    const totalPoints = currentQuiz.q.reduce((a, q) => a + (q.points || 1), 0);
-
-    try {
-        await setDoc(getSessionRefById(sessionDocId), {
-            activeQ: -1, 
-            status: 'waiting', 
-            hostId: user.uid, 
-            pin: sessionID, 
-            timestamp: serverTimestamp(),
-            totalPoints: totalPoints
-        });
-    } catch(e) {
-        console.error(e);
-        if (e.code === 'permission-denied') window.showRulesHelpModal();
-    }
-
-    participantStorageMode = 'session';
-    let sessionParticipants = [];
-    let legacyParticipants = [];
-};
+    document.getElementById('host-pin').innerText = sessionID;
 
     const totalPoints = currentQuiz.q.reduce((a, q) => a + (q.points || 1), 0);
 
