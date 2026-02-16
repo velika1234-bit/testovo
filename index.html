@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>VideoQuiz Ultimate - Professional Edition</title>
+
+    <!-- Tailwind CDN (само за разработка – предупреждението е безвредно) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Lucide икони -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <!-- Библиотеки за Excel и PDF -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.mini.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+
+    <!-- YouTube IFrame API (глобално) -->
+    <script src="https://www.youtube.com/iframe_api"></script>
+
+    <!-- QR код генератор -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+
+    <!-- Персонализирани стилове -->
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="bg-slate-50 min-h-screen">
+
+    <!-- Лоудър -->
+    <div id="auth-loader" class="fixed inset-0 bg-white z-[999] flex flex-col items-center justify-center text-center p-6">
+        <div class="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+        <p class="mt-4 font-black text-slate-400 uppercase text-[10px] tracking-widest">Зареждане на системата...</p>
+        <button onclick="document.getElementById('auth-loader').classList.add('hidden')" class="mt-8 text-[9px] uppercase font-bold text-slate-300 underline">Влез ръчно</button>
+    </div>
+
+    <!-- Контейнер за съобщения -->
+    <div id="msg-container" class="fixed top-4 sm:top-8 left-1/2 -translate-x-1/2 z-[3000] w-full max-w-[280px] sm:max-w-sm px-4 pointer-events-none"></div>
+
+    <!-- Основно приложение -->
+    <div id="app" class="max-w-7xl mx-auto p-3 sm:p-10">
+
+        <!-- ========== ЕКРАНИ ========== -->
+
+        <!-- Welcome Screen -->
+        <div id="screen-welcome" class="py-4 sm:py-12 animate-pop">
+            <header class="text-center mb-12 sm:mb-20">
+                <h1 class="text-5xl sm:text-7xl md:text-9xl font-black mb-4 tracking-tighter text-slate-900 leading-none">VideoQuiz <span class="text-indigo-600">Pro</span></h1>
+                <p class="text-slate-400 font-black uppercase tracking-[0.2em] text-[10px] sm:text-xs">Professional Cloud Edition</p>
+            </header>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 sm:gap-10">
+                <div class="bg-white p-8 rounded-[3rem] border shadow-sm flex flex-col gap-6 text-center">
+                    <h2 class="text-2xl font-black text-indigo-600">Индивидуално</h2>
+                    <input type="text" id="ind-quiz-code" placeholder="Код на урок" class="w-full p-4 bg-slate-50 rounded-2xl border-2 text-center font-bold outline-none">
+                    <label for="ind-sop-mode" class="flex items-center justify-center gap-3 bg-indigo-50 border border-indigo-100 rounded-xl p-3 cursor-pointer">
+                        <input type="checkbox" id="ind-sop-mode" class="w-5 h-5 accent-indigo-600">
+                        <span class="text-xs font-black uppercase text-indigo-700">СОП режим (гласов четец + по-едър текст)</span>
+                    </label>
+                    <label for="ind-discussion-mode" class="flex items-center justify-center gap-3 bg-amber-50 border border-amber-200 rounded-xl p-3 cursor-pointer">
+                        <input type="checkbox" id="ind-discussion-mode" class="w-5 h-5 accent-amber-600">
+                        <span class="text-xs font-black uppercase text-amber-700">Режим обсъждане (без запис в облака)</span>
+                    </label>
+                    <button onclick="window.startIndividual()" class="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black uppercase shadow-xl hover:bg-indigo-700 transition-all text-xs shadow-indigo-200">Започни</button>
+                </div>
+                <div class="bg-white p-8 rounded-[3rem] border-2 border-emerald-500 shadow-2xl flex flex-col gap-6 text-center md:scale-105">
+                    <h2 class="text-2xl font-black text-emerald-600">В Клас</h2>
+                    <input type="text" id="live-student-name" placeholder="Твоето име" class="w-full p-4 bg-slate-50 rounded-2xl border-2 text-center font-bold outline-none">
+                    <input type="text" id="live-pin" placeholder="PIN код" maxlength="4" inputmode="numeric" pattern="[0-9]*" class="w-full p-4 bg-slate-50 rounded-2xl border-2 text-center font-black text-2xl outline-none">
+                    <button onclick="window.joinLiveSession()" class="w-full py-5 bg-emerald-500 text-white rounded-2xl font-black uppercase shadow-xl hover:bg-emerald-600 transition-all text-xs shadow-emerald-200">Влез в сесия</button>
+                </div>
+                <div class="bg-slate-900 p-8 rounded-[3rem] shadow-2xl text-white flex flex-col gap-6 text-center">
+                    <h2 class="text-2xl font-black text-indigo-400">Учители</h2>
+                    <p class="text-[10px] text-slate-400 uppercase font-black">Вход и Регистрация</p>
+                    <button onclick="window.switchScreen('teacher-auth')" class="mt-auto w-full py-5 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs">Влез в панел</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Teacher Dashboard -->
+        <div id="screen-teacher-dashboard" class="hidden animate-pop space-y-8">
+            <div class="flex flex-col md:flex-row items-center justify-between bg-white p-6 sm:p-10 rounded-[3.5rem] border shadow-sm gap-6">
+                <h2 class="text-2xl sm:text-4xl font-black text-slate-900 leading-none">Библиотека</h2>
+                <div class="flex flex-wrap gap-2 justify-center">
+                    <button onclick="window.switchScreen('create')" class="bg-indigo-600 text-white px-8 py-4 rounded-2xl font-black uppercase text-[10px] shadow-lg shadow-indigo-100">+ Нов Урок</button>
+                    <button onclick="window.openImportModal()" class="bg-emerald-500 text-white px-8 py-4 rounded-2xl font-black uppercase text-[10px] shadow-lg shadow-emerald-100">Импорт с код</button>
+                    <button onclick="window.handleLogout()" class="bg-slate-100 text-slate-500 px-8 py-4 rounded-2xl font-black uppercase text-[10px]">Изход</button>
+                    <button id="admin-panel-btn" onclick="window.openAdminPanel()" class="hidden bg-purple-700 text-white px-8 py-4 rounded-2xl font-black uppercase text-[10px] shadow-lg shadow-purple-200">📊 Админ панел</button>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <div class="space-y-4">
+                    <h3 class="text-base font-black flex items-center gap-2 text-indigo-600 px-2"><i data-lucide="book-open"></i> Вашите уроци</h3>
+                    <div id="my-quizzes-list" class="space-y-4 max-h-[600px] overflow-y-auto pr-2 custom-scrollbar"></div>
+                </div>
+                <div class="space-y-4">
+                    <h3 class="text-base font-black flex items-center gap-2 text-indigo-600 px-2"><i data-lucide="users"></i> Резултати</h3>
+                    <div class="flex items-center justify-between gap-3 px-2">
+                        <p id="solo-results-summary" class="text-[11px] text-slate-400 font-bold">Все още няма резултати за този профил.</p>
+                        <button onclick="window.exportSoloResultsExcel()" class="shrink-0 bg-indigo-600 text-white px-3 py-2 rounded-xl font-black uppercase text-[10px] shadow hover:bg-indigo-700 transition-all">Експорт Excel</button>
+                    </div>
+                    <div class="bg-white rounded-[2.5rem] border shadow-sm h-[450px] overflow-hidden flex flex-col">
+                        <div class="overflow-y-auto flex-1 custom-scrollbar">
+                            <table class="w-full text-left">
+                                <thead class="sticky top-0 bg-slate-50 font-black text-[9px] uppercase text-slate-400 border-b">
+                                    <tr>
+                                        <th class="py-4 px-4">Ученик</th>
+                                        <th class="py-4 px-4">Урок</th>
+                                        <th class="py-4 px-4">Дата/Час</th>
+                                        <th class="py-4 px-4 text-right">Точки</th>
+                                        <th class="py-4 px-4 text-center">Изтрий</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="solo-results-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-slate-100 p-4 rounded-2xl text-center">
+                <p class="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Текущо ID (Вашият Имейл/Профил): <span id="debug-uid" class="text-indigo-600 select-all">...</span></p>
+            </div>
+        </div>
+
+        <!-- Teacher Auth Screen -->
+        <div id="screen-teacher-auth" class="hidden py-10 animate-pop">
+            <div class="max-w-md mx-auto bg-white p-10 rounded-[3rem] border shadow-2xl text-center space-y-6">
+                <h2 class="text-2xl font-black" id="auth-title">Вход за Учители</h2>
+
+                <div class="space-y-4 text-left">
+                    <div>
+                        <label class="text-[10px] font-bold text-slate-400 uppercase ml-2">Имена (три имена)</label>
+                        <input type="text" id="auth-name" class="w-full p-4 bg-slate-50 rounded-2xl border-2 font-bold outline-none text-sm">
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-bold text-slate-400 uppercase ml-2">Имейл</label>
+                        <input type="email" id="auth-email" class="w-full p-4 bg-slate-50 rounded-2xl border-2 font-bold outline-none text-sm">
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-bold text-slate-400 uppercase ml-2">Парола</label>
+                        <input type="password" id="auth-password" class="w-full p-4 bg-slate-50 rounded-2xl border-2 font-bold outline-none text-sm">
+                    </div>
+                    <div id="auth-teacher-code-container" class="hidden">
+                        <label class="text-[10px] font-bold text-slate-400 uppercase ml-2">Секретен Код (само за учители)</label>
+                        <input type="password" id="auth-teacher-code" placeholder="Код..." class="w-full p-4 bg-indigo-50 border-2 border-indigo-100 rounded-2xl font-black text-center outline-none text-sm">
+                    </div>
+                </div>
+
+                <button id="auth-submit-btn" onclick="window.handleAuthSubmit()" class="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black uppercase shadow-xl hover:bg-indigo-700 transition-all text-sm">Влез</button>
+
+                <p id="auth-toggle-text" class="text-xs text-slate-500" onclick="window.toggleAuthMode()">
+                    Нямате акаунт? <span class="underline font-black cursor-pointer">Регистрирайте се</span>
+                </p>
+
+                <button onclick="window.switchScreen('welcome')" class="text-[10px] font-bold text-slate-400 uppercase mt-4">Назад</button>
+            </div>
+        </div>
+
+        <!-- Creator View -->
+        <div id="screen-create" class="hidden space-y-6 animate-pop">
+            <div class="bg-white p-6 rounded-[3rem] border shadow-sm flex flex-col md:flex-row gap-4 items-center">
+                <button onclick="window.switchScreen('teacher-dashboard')" class="p-5 bg-slate-50 rounded-2xl"><i data-lucide="arrow-left"></i></button>
+                <input type="text" id="yt-url" placeholder="YouTube линк..." class="flex-1 w-full p-5 bg-slate-50 rounded-2xl border-2 border-transparent focus:border-indigo-600 outline-none font-bold">
+                <div class="flex gap-2 w-full sm:w-auto">
+                    <button onclick="window.loadEditorVideo()" class="flex-1 sm:flex-none bg-slate-900 text-white px-8 py-5 rounded-2xl font-black uppercase text-xs">Зареди</button>
+                    <button onclick="window.saveQuizToLibrary()" class="flex-1 sm:flex-none bg-indigo-600 text-white px-8 py-5 rounded-2xl font-black uppercase shadow-xl text-xs">Запази</button>
+                </div>
+            </div>
+            <div id="editor-view" class="hidden grid grid-cols-1 lg:grid-cols-12 gap-8">
+                <div class="lg:col-span-8">
+                    <div id="editor-player-container" class="video-container border-4 border-white shadow-2xl"></div>
+                    <div class="mt-6 bg-white p-8 rounded-[3.5rem] flex flex-col sm:flex-row justify-between items-center border shadow-sm gap-6">
+                        <div class="text-5xl sm:text-7xl font-black text-indigo-600" id="timer">00:00</div>
+                        <button onclick="window.openQuestionModal()" class="w-full sm:w-auto bg-rose-500 text-white px-10 py-6 rounded-[2rem] font-black uppercase flex items-center justify-center gap-3 hover:scale-105 transition-all shadow-xl shadow-rose-100">
+                            <i data-lucide="plus-circle"></i> Добави въпрос
+                        </button>
+                    </div>
+                </div>
+                <div class="lg:col-span-4 bg-white rounded-[3rem] p-6 h-[550px] flex flex-col border shadow-sm overflow-hidden">
+                    <h3 class="pb-3 border-b mb-4 font-black text-[10px] text-slate-400 uppercase tracking-widest text-center">Настройка</h3>
+                    <div id="q-list" class="flex-1 overflow-y-auto custom-scrollbar space-y-2"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Live Host View -->
+        <div id="screen-live-host" class="hidden space-y-6 animate-pop">
+            <div class="bg-indigo-600 p-8 rounded-[3rem] text-white flex justify-between items-center shadow-2xl shadow-indigo-100">
+                <div>
+                    <span class="text-[10px] font-black uppercase opacity-60">ПИН:</span>
+                    <div class="text-6xl font-black" id="host-pin">----</div>
+                </div>
+                <div class="flex gap-2 items-center">
+                    <!-- Бутони за експорт (скрити до края на сесията) -->
+                    <div id="export-buttons-container" class="hidden gap-2">
+                        <button onclick="window.exportExcel()" class="bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-4 rounded-xl font-black uppercase text-xs shadow-lg transition-all flex items-center gap-2"><i data-lucide="file-spreadsheet" class="w-4 h-4"></i> Excel</button>
+                        <button onclick="window.exportPDF()" class="bg-slate-700 hover:bg-slate-800 text-white px-6 py-4 rounded-xl font-black uppercase text-xs shadow-lg transition-all flex items-center gap-2"><i data-lucide="file-text" class="w-4 h-4"></i> PDF</button>
+                    </div>
+                    <button onclick="window.finishLiveSession()" class="bg-rose-500 px-6 py-4 rounded-xl font-black uppercase text-xs shadow-lg">Край</button>
+                    <button onclick="window.quitHostSession()" class="bg-white/10 px-6 py-4 rounded-xl font-black uppercase text-xs">Назад</button>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                <div class="lg:col-span-8">
+                    <div id="host-player-area" class="hidden">
+                        <!-- Прогрес бар -->
+                        <div class="mb-6 bg-white p-6 rounded-[2.5rem] shadow-xl shadow-indigo-50 border flex flex-col sm:flex-row items-center gap-6 relative overflow-hidden">
+                            <div class="absolute top-0 left-0 w-2 h-full bg-indigo-600"></div>
+                            <div class="flex items-center gap-3 z-10">
+                                <div class="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
+                                    <i data-lucide="bar-chart-2" class="w-6 h-6"></i>
+                                </div>
+                                <div>
+                                    <h3 class="font-black text-slate-800 text-sm uppercase leading-none">Успеваемост</h3>
+                                    <p id="progress-stats-text" class="text-[10px] font-bold text-slate-400 mt-1">Няма данни</p>
+                                    <p id="fastest-reaction-text" class="text-[10px] font-bold text-indigo-500 mt-1">⚡ Най-бърз отговор: няма данни</p>
+                                </div>
+                            </div>
+                            <div class="flex-1 w-full bg-slate-100 h-8 rounded-full overflow-hidden shadow-inner relative">
+                                <div id="class-progress-bar" class="w-full h-full flex transition-opacity duration-500 opacity-0">
+                                    <div id="progress-correct" class="h-full bg-gradient-to-r from-emerald-400 to-emerald-600 flex items-center justify-end pr-2 transition-all duration-700 shadow-[0_0_20px_rgba(16,185,129,0.4)]"></div>
+                                    <div id="progress-wrong" class="h-full bg-rose-400/20 transition-all duration-700"></div>
+                                </div>
+                            </div>
+                            <div class="text-2xl font-black text-slate-800 z-10 min-w-[3.5rem] text-right" id="progress-percent">0%</div>
+                        </div>
+                        <div id="host-video-container" class="video-container border-4 border-white shadow-2xl rounded-[2.5rem]"></div>
+                        <div class="mt-4 bg-white p-6 rounded-[2rem] shadow-sm border">
+                            <div class="flex justify-between items-center">
+                                <div class="text-5xl font-black text-indigo-600" id="host-timer">00:00</div>
+                                <div id="participant-info" class="text-sm font-black text-slate-400 uppercase tracking-widest"><span id="host-participant-count">0</span> Участници</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="host-setup-area" class="bg-white p-12 rounded-[3rem] text-center shadow-sm border">
+                        <button onclick="window.initHostPlayer()" class="w-full py-6 bg-indigo-600 text-white rounded-2xl font-black uppercase shadow-xl">Започни Видеото</button>
+                    </div>
+                </div>
+                <!-- Дясна колона: класиране + QR код -->
+                <div class="lg:col-span-4 bg-white rounded-[3rem] flex flex-col border shadow-sm overflow-hidden min-h-full">
+                    <div class="p-5 border-b font-black uppercase text-[10px] text-slate-500 text-center">Класиране</div>
+                    <div class="flex-1 overflow-y-auto p-3 custom-scrollbar">
+                        <table class="w-full"><tbody id="host-results-body"></tbody></table>
+                    </div>
+                    <!-- QR код под класирането (първоначално скрит) -->
+                    <div id="qr-container" class="hidden p-3 border-t border-slate-200 flex flex-col items-center">
+                        <div id="qr-code"></div>
+                        <span class="text-[10px] font-bold text-slate-500 mt-1">Сканирай за бърз вход</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Solo Solving View -->
+        <div id="screen-solve" class="hidden relative h-[85vh] overflow-hidden rounded-[3rem] bg-black shadow-2xl border-[8px] border-slate-900">
+            <div id="solve-player-container" class="absolute inset-0"></div>
+            <div id="ind-overlay" class="absolute inset-0 bg-slate-900/95 backdrop-blur-md hidden flex-col items-center justify-center p-6 z-[100] animate-pop text-center">
+                <div class="max-w-3xl w-full space-y-10">
+                    <h3 id="ind-overlay-q-text" class="text-xl sm:text-4xl font-black text-white leading-tight">...</h3>
+                    <div id="ind-overlay-options" class="grid grid-cols-1 gap-4 w-full"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Student View -->
+        <div id="screen-live-client" class="hidden min-h-[70vh] flex flex-col items-center justify-center animate-pop p-4 text-center pb-32">
+            <div id="client-waiting" class="space-y-8">
+                <div class="w-32 h-32 bg-white rounded-[2.5rem] flex items-center justify-center mx-auto text-6xl shadow-2xl shadow-indigo-100 animate-bounce" id="my-avatar-display">👤</div>
+                <h2 id="waiting-status-text" class="text-xl sm:text-3xl font-black uppercase text-slate-800">Изчакай въпрос...</h2>
+            </div>
+            <div id="client-question" class="hidden w-full max-w-2xl bg-white p-8 rounded-[3rem] shadow-2xl">
+                <h3 id="live-q-text-client" class="text-lg sm:text-2xl font-black mb-10 leading-tight">...</h3>
+                <div id="live-options-client" class="grid grid-cols-1 gap-3"></div>
+            </div>
+            <div id="client-finished" class="hidden bg-white p-12 rounded-[3rem] shadow-2xl text-center">
+                <h2 class="text-2xl sm:text-4xl font-black">Приключи!</h2>
+                <div class="text-7xl font-black text-indigo-600 mt-4" id="final-score-display">0</div>
+                <button onclick="location.reload()" class="w-full mt-8 py-4 bg-slate-900 text-white rounded-2xl font-black uppercase text-xs">Начало</button>
+            </div>
+        </div>
+
+        <!-- Finish Result Screen -->
+        <div id="screen-finish" class="hidden py-20 text-center animate-pop">
+            <h2 class="text-3xl sm:text-6xl font-black text-slate-900 mb-6">Браво! 🎉</h2>
+            <div id="res-score" class="text-7xl sm:text-[10rem] font-black text-indigo-600 mb-10">0/0</div>
+            <button onclick="location.reload()" class="py-5 px-16 bg-slate-900 text-white rounded-2xl font-black uppercase text-xs">Начало</button>
+        </div>
+
+        <!-- ========== МОДАЛИ ========== -->
+
+        <!-- Модал за добавяне/редакция на въпрос -->
+        <div id="modal-q" class="fixed inset-0 bg-slate-900/95 backdrop-blur-xl hidden items-center justify-center p-4 z-[2000]">
+            <div class="bg-white w-full max-w-xl rounded-[4rem] p-12 animate-pop flex flex-col gap-8 shadow-2xl max-h-[95vh] overflow-y-auto custom-scrollbar">
+                <div class="flex items-center justify-between"><h2 class="text-2xl font-black" id="m-title-text">Нов въпрос</h2><span id="m-time" class="bg-indigo-600 text-white px-6 py-2 rounded-xl font-black text-sm">00:00</span></div>
+                <div class="grid grid-cols-2 gap-4">
+                    <select id="m-type" onchange="window.updateModalFields()" class="p-5 bg-slate-50 border-2 rounded-2xl font-black outline-none text-xs">
+                        <option value="single">Един верен</option>
+                        <option value="multiple">Няколко верни</option>
+                        <option value="boolean">Вярно/Невярно</option>
+                        <option value="open">Отворен отговор</option>
+                        <option value="ordering">Подреждане</option>
+                        <option value="timeline">📅 Хронология (Timeline)</option>
+                        <option value="numeric">Числен отговор (плъзгач)</option>
+                        <option value="timeline-slider">📅 Хронологичен плъзгач (Timeline Slider)</option>
+                    </select>
+                    <input type="number" id="m-points" value="1" min="1" class="p-5 bg-slate-50 border-2 rounded-2xl font-black text-center text-xs">
+                </div>
+                <textarea id="m-text" placeholder="Задайте въпрос тук..." class="w-full p-6 bg-slate-50 rounded-2xl font-black border-2 outline-none text-sm resize-none" rows="3"></textarea>
+                <div id="m-opts-container" class="space-y-3"></div>
+                <button onclick="window.saveQuestion()" class="w-full bg-indigo-600 text-white py-6 rounded-2xl font-black shadow-2xl uppercase hover:bg-indigo-700 transition-all">Запази</button>
+                <button onclick="document.getElementById('modal-q').classList.add('hidden')" class="text-slate-400 font-black uppercase text-[10px] text-center">Отказ</button>
+            </div>
+        </div>
+
+        <!-- Модал за споделяне на код -->
+        <div id="modal-share" class="fixed inset-0 bg-slate-900/90 backdrop-blur-xl hidden items-center justify-center p-4 z-[2500]">
+            <div class="bg-white w-full max-w-lg rounded-[3rem] p-10 shadow-2xl animate-pop text-center space-y-8">
+                <h2 class="text-xl font-black text-slate-900">Код на урока</h2>
+                <textarea id="share-code-display" readonly class="w-full p-5 bg-slate-50 rounded-2xl border font-mono text-[10px] break-all h-32 outline-none shadow-inner"></textarea>
+                <div class="grid grid-cols-2 gap-4">
+                    <button onclick="window.copyShareCode()" class="bg-indigo-600 text-white py-5 rounded-2xl font-black uppercase shadow-xl text-[10px]">Копирай</button>
+                    <button onclick="document.getElementById('modal-share').classList.add('hidden')" class="bg-slate-100 text-slate-500 py-5 rounded-2xl font-black uppercase text-[10px]">Затвори</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Модал за импортиране на урок -->
+        <div id="modal-import" class="fixed inset-0 bg-slate-900/90 backdrop-blur-xl hidden items-center justify-center p-4 z-[2500]">
+            <div class="bg-white w-full max-w-lg rounded-[3rem] p-10 shadow-2xl animate-pop text-center space-y-8">
+                <h2 class="text-xl font-black text-slate-900">Импортиране на Урок</h2>
+                <p class="text-xs text-slate-500">Поставете дългия код тук:</p>
+                <textarea id="import-code-input" placeholder="eyJ2Ijoi..." class="w-full p-5 bg-slate-50 rounded-2xl border font-mono text-[10px] h-32 outline-none shadow-inner resize-none"></textarea>
+                <div class="grid grid-cols-2 gap-4">
+                    <button onclick="window.submitImport()" class="bg-emerald-500 text-white py-5 rounded-2xl font-black uppercase shadow-xl text-[10px]">Импортирай</button>
+                    <button onclick="document.getElementById('modal-import').classList.add('hidden')" class="bg-slate-100 text-slate-500 py-5 rounded-2xl font-black uppercase text-[10px]">Отказ</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Модал за помощ при permission грешки -->
+        <div id="modal-rules-help" class="fixed inset-0 bg-slate-900/95 backdrop-blur-xl hidden items-center justify-center p-4 z-[3000]">
+            <div class="bg-white w-full max-w-2xl rounded-[3rem] p-8 md:p-12 animate-pop flex flex-col gap-6 shadow-2xl max-h-[95vh] overflow-y-auto custom-scrollbar relative">
+                <button onclick="document.getElementById('modal-rules-help').classList.add('hidden')" class="absolute top-8 right-8 text-slate-400 hover:text-slate-600">
+                    <i data-lucide="x" class="w-8 h-8"></i>
+                </button>
+
+                <div class="text-center space-y-2">
+                    <div class="w-20 h-20 bg-rose-100 text-rose-500 rounded-3xl flex items-center justify-center mx-auto text-4xl mb-4 animate-bounce">⚠️</div>
+                    <h2 class="text-3xl font-black text-slate-900">Достъпът е отказан</h2>
+                    <p class="text-slate-500 font-bold">Базата данни във Firebase е "заключена".</p>
+                </div>
+
+                <div class="bg-slate-50 p-6 rounded-[2rem] border-2 border-indigo-100 space-y-4">
+                    <h3 class="font-black text-indigo-600 uppercase text-xs tracking-widest">Как да поправите това (стъпка по стъпка):</h3>
+                    <ol class="list-decimal pl-5 space-y-2 text-sm font-bold text-slate-700">
+                        <li>Отворете <a href="https://console.firebase.google.com/" target="_blank" class="text-indigo-600 underline">Firebase Console</a> и влезте във вашия проект.</li>
+                        <li>Отидете на <strong>Build</strong> -> <strong>Firestore Database</strong>.</li>
+                        <li>Кликнете на таба <strong>Rules</strong> (горе в средата).</li>
+                        <li>Изтрийте всичко там и поставете този код:</li>
+                    </ol>
+                    
+                    <div class="relative group">
+                        <pre class="bg-slate-900 text-slate-300 p-6 rounded-2xl font-mono text-xs overflow-x-auto select-all">rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Основен път на приложението
+    match /artifacts/videoquiz-ultimate-live {
+      
+      // 1. ПУБЛИЧНИ ДАННИ (Сесии на живо)
+      match /public/data/{document=**} {
+        allow read, write: if true;
+      }
+
+      // 2. ДАННИ НА УЧИТЕЛЯ (Лична папка)
+      // Учителят има пълен контрол над всичко в своята папка
+      match /users/{userId}/{document=**} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+      
+      // 3. ИЗКЛЮЧЕНИЕ ЗА РЕЗУЛТАТИ (Индивидуален режим)
+      // Позволяваме на учениците (всеки логнат, вкл. анонимно) да ЗАПИСВА резултат
+      match /users/{teacherId}/solo_results/{resultId} {
+         allow create: if request.auth != null;
+      }
+    }
+  }
+}</pre>
+                    </div>
+                    
+                    <p class="text-xs text-slate-400 text-center font-bold uppercase mt-2">След това натиснете "Publish" и презаредете тази страница.</p>
+                </div>
+
+                <button onclick="location.reload()" class="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black uppercase shadow-xl hover:bg-indigo-700 transition-all text-sm shadow-indigo-200">Готово, презареди!</button>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Модул с цялата логика -->
+    <script type="module" src="js/app.js"></script>
+
+    <!-- Скрипт за автоматично попълване на PIN от QR код -->
+    <script>
+        (function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const joinCode = urlParams.get('join');
+            if (joinCode) {
+                window.addEventListener('DOMContentLoaded', function() {
+                    const pinInput = document.getElementById('live-pin');
+                    if (pinInput) {
+                        pinInput.value = joinCode;
+                        setTimeout(() => {
+                            document.getElementById('live-student-name').focus();
+                        }, 100);
+                    }
+                });
+            }
+        })();
+    </script>
+</body>
+</html>
