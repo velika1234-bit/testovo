@@ -60,3 +60,30 @@ export const shuffleArray = (arr) => {
     }
     return copy;
 };
+// --- Генериране на QR код (връща data URL) ---
+export const generateQRCode = (text, size = 200) => {
+    if (typeof qrcode === 'undefined') {
+        console.error('QR код библиотеката не е заредена!');
+        return null;
+    }
+    try {
+        const qr = qrcode(0, 'H');
+        qr.addData(text);
+        qr.make();
+        const canvas = document.createElement('canvas');
+        const cellSize = 4;
+        canvas.width = qr.getModuleCount() * cellSize;
+        canvas.height = qr.getModuleCount() * cellSize;
+        const ctx = canvas.getContext('2d');
+        for (let row = 0; row < qr.getModuleCount(); row++) {
+            for (let col = 0; col < qr.getModuleCount(); col++) {
+                ctx.fillStyle = qr.isDark(row, col) ? '#000000' : '#ffffff';
+                ctx.fillRect(col * cellSize, row * cellSize, cellSize, cellSize);
+            }
+        }
+        return canvas.toDataURL('image/png');
+    } catch (error) {
+        console.error('Грешка при генериране на QR код:', error);
+        return null;
+    }
+};
