@@ -83,19 +83,6 @@ const toBool = (v) => {
   if (['false','0','no','n','f','не','грешно'].includes(s)) return false;
   return null;
 };
-// --- ANSWER CHECK (shared for SOLO + LIVE) ---
-// ВАЖНО: функцията трябва да е в глобалния (module) scope, за да работят всички типове въпроси.
-
-const toBool = (v) => {
-  if (typeof v === 'boolean') return v;
-  if (typeof v === 'number') return v !== 0;
-
-  const s = String(v ?? '').trim().toLowerCase();
-  if (['true','1','yes','y','t','вярно','да'].includes(s)) return true;
-  if (['false','0','no','n','f','грешно','не'].includes(s)) return false;
-
-  return null;
-};
 
 const isAnswerCorrect = (q, value) => {
   if (!q) return false;
