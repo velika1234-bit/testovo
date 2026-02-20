@@ -74,43 +74,69 @@ window.tempLiveSelection = null;
 
 // --- ANSWER CHECK (shared for SOLO + LIVE) ---
 // ВАЖНО: функцията трябва да е в глобалния (module) scope, за да работят всички типове въпроси.
+// Boolean FIX: приема коректно true/false, 1/0, "true"/"false", "ДА"/"НЕ", "Вярно"/"Грешно".
+const toBool = (v) => {
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v !== 0;
+  const s = String(v ?? '').trim().toLowerCase();
+  if (['true','1','yes','y','t','да','вярно'].includes(s)) return true;
+  if (['false','0','no','n','f','не','грешно'].includes(s)) return false;
+  return null;
+};
+
 const isAnswerCorrect = (q, value) => {
-    if (!q) return false;
-    const type = q.type || 'single';
-    const correct = q.correct ?? q.answer ?? q.correctIndex ?? q.correctIndices;
-    if (type === 'single' || type === 'boolean') {
-        const v = String(value ?? '');
-        // correct може да е индекс (0..), буква ('A'), или текст на отговор
-        if (typeof correct === 'number') return Number(v) === correct;
-        if (typeof correct === 'string') return v.toLowerCase() === correct.toLowerCase();
-        if (Array.isArray(correct) && correct.length === 1) return v === String(correct[0]);
-        return false;
-    }
-    if (type === 'multiple') {
-        const arr = Array.isArray(value) ? value.map(String) : [];
-        if (Array.isArray(correct)) {
-            const c = correct.map(String).sort().join('|');
-            const a = arr.sort().join('|');
-            return a === c;
-        }
-        return false;
-    }
-    if (type === 'open') {
-        // за отчитане: приемаме за вярно, ако има въведен текст, но реалната проверка е по желание
-        const txt = String(value ?? '').trim();
-        return txt.length > 0;
-    }
-    if (type === 'numeric' || type === 'slider') {
-        const num = Number(value);
-        const cnum = Number(correct);
-        if (!Number.isFinite(num) || !Number.isFinite(cnum)) return false;
-        const tol = Number(q.tolerance ?? 0);
-        return Math.abs(num - cnum) <= tol;
+  if (!q) return false;
+
+  const type = (q.type || 'single').toLowerCase();
+  const correctRaw = q.correct ?? q.answer ?? q.correctIndex ?? q.correctIndices ?? q.correctBool ?? q.correctValue ?? q.correctAnswer;
+
+  // SINGLE + BOOLEAN
+  if (type === 'single' || type === 'mcq') {
+    const v = String(value ?? '');
+    // correct може да е индекс (0..), буква ('A'), или текст на отговор
+    if (typeof correctRaw === 'number') return Number(v) === correctRaw;
+    if (typeof correctRaw === 'string') return v.trim().toLowerCase() === correctRaw.trim().toLowerCase();
+    if (Array.isArray(correctRaw) && correctRaw.length === 1) return v === String(correctRaw[0]);
+    return false;
+  }
+
+  if (type === 'boolean' || type === 'tf' || type === 'truefalse') {
+    const userB = toBool(value);
+    const corrB = toBool(correctRaw);
+    if (userB === null || corrB === null) return false;
+    return userB === corrB;
+  }
+
+  // MULTIPLE
+  if (type === 'multiple') {
+    const arr = Array.isArray(value) ? value.map(String) : [];
+    if (Array.isArray(correctRaw)) {
+      const c = correctRaw.map(String).sort().join('|');
+      const a = arr.sort().join('|');
+      return a === c;
     }
     return false;
-};
-window.isAnswerCorrect = isAnswerCorrect;
+  }
 
+  // OPEN (short answer) — по подразбиране се отчита като "отговорен", но не се оценява автоматично
+  if (type === 'open') {
+    const txt = String(value ?? '').trim();
+    return txt.length > 0;
+  }
+
+  // SLIDER / NUMERIC
+  if (type === 'numeric' || type === 'slider') {
+    const num = Number(value);
+    const cnum = Number(correctRaw);
+    if (!Number.isFinite(num) || !Number.isFinite(cnum)) return false;
+    const tol = Number(q.tolerance ?? 0);
+    return Math.abs(num - cnum) <= tol;
+  }
+
+  return false;
+};
+
+window.isAnswerCorrect = isAnswerCorrect;
 // --- SAFE DOM HELPERS ---
 const safeSetText = (id, text) => {
     const el = document.getElementById(id);
