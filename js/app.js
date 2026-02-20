@@ -1105,67 +1105,121 @@ window.exportExcel = () => {
 };
 
 window.exportPDF = () => {
-    const data = getResultsData();
-    if (data.length === 0) return window.showMessage("Няма данни за PDF експорт.", "error");
+  const data = getResultsData();
+  if (!data || data.length === 0) return window.showMessage("Няма данни за PDF експорт.", "error");
 
-    if (!window.jspdf || !window.jspdf.jsPDF) {
-        return window.showMessage("PDF библиотеката не е заредена.", "error");
-    }
+  const analytics = getClassQuestionStats?.() || { rows: [] };
 
-    const analytics = getClassQuestionStats();
-    const { jsPDF } = window.jspdf;
-    const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+  // data is like: [headRow, ...bodyRows]
+  const [head, ...body] = data;
 
-    const [head, ...body] = data;
+  // helpers
+  const esc = (s) => String(s ?? "")
+    .replaceAll("&","&amp;").replaceAll("<","&lt;")
+    .replaceAll(">","&gt;").replaceAll('"',"&quot;");
 
-    doc.setFont('times', 'bold');
-    doc.setFontSize(16);
-    doc.text(`VideoQuiz - Резултати от сесия ${sessionID}`, 40, 40);
-    doc.setFont('times', 'normal');
-    doc.setFontSize(10);
-    doc.text(`Дата: ${new Date().toLocaleString('bg-BG')}`, 40, 58);
+  const now = new Date().toLocaleString("bg-BG");
 
-    doc.autoTable({
-        head: [head],
-        body: body,
-        startY: 72,
-        theme: 'grid',
-        styles: { fontSize: 8, cellPadding: 4, overflow: 'linebreak', font: 'times' },
-        headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255] },
-        alternateRowStyles: { fillColor: [248, 250, 252] }
+  // Опит да изчислим среден успех от точките (ако имаме колони "Точки" и "Макс" или "X/Y")
+  // Ако не може — ще го пропуснем тихо.
+  let avgPct = null;
+  try {
+    // намираме индекс на колона "Точки" (или "Резултат")
+    const headLower = head.map(h => String(h).toLowerCase());
+    const idxScore = headLower.findIndex(h => h.includes("точк") || h.includes("резултат") || h.includes("score"));
+    const idxMax = headLower.findIndex(h => h.includes("макс") || h.includes("max"));
+
+    const pcts = [];
+    body.forEach(row => {
+      const s = row[idxScore];
+      const m = idxMax >= 0 ? row[idxMax] : null;
+
+      // формат "X/Y"
+      if (typeof s === "string" && s.includes("/")) {
+        const [a,b] = s.split("/").map(x => Number(String(x).trim()));
+        if (Number.isFinite(a) && Number.isFinite(b) && b > 0) pcts.push(Math.round((a/b)*100));
+        return;
+      }
+      // формат отделно score/max
+      const score = Number(s);
+      const max = Number(m);
+      if (Number.isFinite(score) && Number.isFinite(max) && max > 0) pcts.push(Math.round((score/max)*100));
     });
 
-    const analyticsHead = [['№', 'Въпрос', 'Верни', 'Грешни', 'Без отговор', '% Верни', '% Грешни', 'Първи верен', 'Време (s)']];
-    const analyticsBody = analytics.rows.map((r) => [
-        r.qIdx + 1,
-        r.questionText,
-        r.correct,
-        r.wrong,
-        r.missing,
-        `${r.correctPct}%`,
-        `${r.wrongPct}%`,
-        r.firstCorrectName,
-        r.firstCorrectSeconds
-    ]);
+    if (pcts.length) avgPct = Math.round(pcts.reduce((a,b)=>a+b,0)/pcts.length);
+  } catch(e) {}
 
-    const nextY = (doc.lastAutoTable?.finalY || 72) + 16;
-    doc.setFont('times', 'bold');
-    doc.setFontSize(12);
-    doc.text(`Обща успеваемост: ${analytics.summary?.classCorrectPct ?? 0}% верни / ${analytics.summary?.classWrongPct ?? 0}% грешни`, 40, nextY);
+  const makeTable = (headers, rows) => {
+    const thead = headers.map(h => `<th>${esc(h)}</th>`).join("");
+    const tbody = rows.length
+      ? rows.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")
+      : `<tr><td colspan="${headers.length}">Няма данни</td></tr>`;
+    return `
+      <table>
+        <thead><tr>${thead}</tr></thead>
+        <tbody>${tbody}</tbody>
+      </table>
+    `;
+  };
 
-    doc.autoTable({
-        head: analyticsHead,
-        body: analyticsBody,
-        startY: nextY + 8,
-        theme: 'grid',
-        styles: { fontSize: 8, cellPadding: 4, overflow: 'linebreak', font: 'times' },
-        headStyles: { fillColor: [16, 185, 129], textColor: [255, 255, 255] },
-        alternateRowStyles: { fillColor: [248, 250, 252] }
-    });
+  const analyticsHead = ['№','Въпрос','Верни','Грешни','Без отговор','% Верни','% Грешни','Първи верен','Време (s)'];
+  const analyticsBody = (analytics.rows || []).map(r => ([
+    String((r.qIdx ?? 0) + 1),
+    r.questionText ?? "",
+    String(r.correct ?? 0),
+    String(r.wrong ?? 0),
+    String(r.missing ?? 0),
+    `${r.correctPct ?? 0}%`,
+    `${r.wrongPct ?? 0}%`,
+    r.firstCorrectName ?? "—",
+    String(r.firstCorrectSeconds ?? "—")
+  ]));
 
-    const timestamp = new Date().toISOString().slice(0,19).replace(/[-:T]/g,"");
-    doc.save(`results_${sessionID}_${timestamp}.pdf`);
-    window.showMessage("PDF файлът е генериран (вкл. анализ по въпроси).");
+  const html = `<!doctype html>
+<html lang="bg">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>VideoQuiz - PDF</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; padding:18px; color:#111;}
+  h1{margin:0 0 6px; font-size:18px;}
+  .meta{font-size:12px; color:#333; margin:2px 0;}
+  .summary{margin:12px 0; padding:10px; border:1px solid #ddd; background:#fcfcfc; font-size:12px;}
+  table{width:100%; border-collapse:collapse; margin-top:10px; font-size:11px;}
+  th,td{border:1px solid #999; padding:6px; vertical-align:top;}
+  th{background:#f2f2f2; text-align:left;}
+  tr:nth-child(even) td{background:#fafafa;}
+  .section-title{margin-top:16px; font-weight:800; font-size:13px;}
+  @media print { body{padding:0;} }
+</style>
+</head>
+<body>
+  <h1>VideoQuiz – Резултати от сесия ${esc(sessionID || "")}</h1>
+  <div class="meta">Дата: ${esc(now)}</div>
+
+  <div class="summary">
+    <div>• Брой участници: <b>${esc(body.length)}</b></div>
+    ${avgPct === null ? "" : `<div>• Среден успех на класа: <b>${avgPct}%</b></div>`}
+  </div>
+
+  <div class="section-title">Резултати</div>
+  ${makeTable(head, body)}
+
+  <div class="section-title">Анализ по въпроси</div>
+  ${makeTable(analyticsHead, analyticsBody)}
+
+  <script>
+    setTimeout(()=>window.print(), 250);
+  </script>
+</body>
+</html>`;
+
+  const w = window.open("", "_blank");
+  if (!w) return window.showMessage("Браузърът блокира нов прозорец (pop-up). Разреши pop-ups и пробвай пак.", "error");
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
 };
 
 // --- STUDENT CLIENT LOGIC ---
