@@ -1222,7 +1222,7 @@ window.selectLiveOption = (el, val) => {
 
 window.submitLiveSingleConfirm = () => {
     if (window.tempLiveSelection === null) return;
-    const isCorrect = window.tempLiveSelection === window.currentLiveQ.correct;
+    const isCorrect = isAnswerCorrect(window.currentLiveQ, window.tempLiveSelection);
     window.submitLiveFinal(isCorrect);
 };
 
@@ -1238,13 +1238,13 @@ window.selectLiveMultiple = () => {
 
 window.submitLiveMultipleConfirm = () => {
     const checked = Array.from(document.querySelectorAll('input[name="c-multiple"]:checked')).map(el => parseInt(el.value));
-    const isCorrect = JSON.stringify(checked.sort()) === JSON.stringify(window.currentLiveQ.correct.sort());
+    const isCorrect = isAnswerCorrect(window.currentLiveQ, checked);
     window.submitLiveFinal(isCorrect);
 };
 
 window.submitLiveOpenConfirm = () => {
     const ans = document.getElementById('c-open-answer')?.value.trim().toLowerCase();
-    const isCorrect = ans === window.currentLiveQ.correct;
+    const isCorrect = isAnswerCorrect(window.currentLiveQ, ans);
     window.submitLiveFinal(isCorrect);
 };
 
@@ -1307,7 +1307,7 @@ window.submitLiveTimelineConfirm = () => {
     if (!Array.isArray(window.userOrderSequence) || window.userOrderSequence.length !== q.options.length) {
         return window.showMessage('Подредете всички събития!', 'error');
     }
-    const isCorrect = JSON.stringify(window.userOrderSequence) === JSON.stringify(q.correct);
+    const isCorrect = isAnswerCorrect(q, window.userOrderSequence);
     window.submitLiveFinal(isCorrect);
 };
 
@@ -1324,7 +1324,7 @@ window.submitLiveOrderingConfirm = () => {
     if (!Array.isArray(window.userOrderSequence) || window.userOrderSequence.length !== q.options.length) {
         return window.showMessage('Подредете всички елементи!', 'error');
     }
-    const isCorrect = JSON.stringify(window.userOrderSequence) === JSON.stringify(q.correct);
+    const isCorrect = isAnswerCorrect(q, window.userOrderSequence);
     window.submitLiveFinal(isCorrect);
 };
 
@@ -1702,7 +1702,66 @@ window.submitSoloNumeric = () => {
     const correct = q.correct;
     const tolerance = q.tolerance || 0;
     const isCorrect = Math.abs(answer - correct) <= tolerance;
-    window.submitSoloFinal(isCorrect);
+    
+// --- ANSWER NORMALIZATION (fix: single/boolean/multiple not scoring) ---
+const _toNum = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+const _toBool = (v) => {
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v === 1;
+  if (typeof v === 'string') {
+    const t = v.trim().toLowerCase();
+    if (t === 'true' || t === 'да' || t === 'yes') return true;
+    if (t === 'false' || t === 'не' || t === 'no') return false;
+    const n = _toNum(t);
+    if (n !== null) return n === 1;
+  }
+  return null;
+};
+const _normStr = (v) => String(v ?? '').trim().toLowerCase();
+const _normArrNums = (arr) => (Array.isArray(arr) ? arr : []).map(x => _toNum(x)).filter(x => x !== null).sort((a,b)=>a-b);
+
+const isAnswerCorrect = (q, value) => {
+  if (!q) return false;
+  const type = q.type;
+
+  if (type === 'boolean') {
+    const a = _toBool(value);
+    const c = _toBool(q.correct);
+    return a !== null && c !== null && a === c;
+  }
+
+  if (type === 'single') {
+    const a = _toNum(value);
+    const c = _toNum(q.correct);
+    return a !== null && c !== null && a === c;
+  }
+
+  if (type === 'multiple') {
+    const a = _normArrNums(value);
+    const c = _normArrNums(q.correct);
+    return JSON.stringify(a) === JSON.stringify(c);
+  }
+
+  if (type === 'open') {
+    const a = _normStr(value);
+    const c = q.correct;
+    if (Array.isArray(c)) return c.map(_normStr).includes(a);
+    return a === _normStr(c);
+  }
+
+  if (type === 'ordering' || type === 'timeline') {
+    const a = _normArrNums(value);
+    const c = _normArrNums(q.correct);
+    return JSON.stringify(a) === JSON.stringify(c);
+  }
+
+  // numeric handled elsewhere (tolerance)
+  return false;
+};
+window.submitSoloFinal(isCorrect);
 };
 
 window.submitSoloFinal = (isCorrect) => {
@@ -1715,21 +1774,21 @@ window.submitSoloFinal = (isCorrect) => {
 
 window.submitSoloMultiple = () => {
     const checked = Array.from(document.querySelectorAll('input[name="s-multiple"]:checked')).map(el => parseInt(el.value));
-    const isCorrect = JSON.stringify(checked.sort()) === JSON.stringify(currentQuiz.q[currentQIndex].correct.sort());
+    const isCorrect = isAnswerCorrect(currentQuiz.q[currentQIndex], checked);
     window.submitSoloFinal(isCorrect);
 };
 
 window.submitSoloOpen = () => {
     const ans = document.getElementById('s-open-answer')?.value.trim().toLowerCase();
-    window.submitSoloFinal(ans === currentQuiz.q[currentQIndex].correct);
+    window.submitSoloFinal(isAnswerCorrect(currentQuiz.q[currentQIndex], ans));
 };
 
-window.submitSolo = (v) => window.submitSoloFinal(v === currentQuiz.q[currentQIndex].correct);
+window.submitSolo = (v) => window.submitSoloFinal(isAnswerCorrect(currentQuiz.q[currentQIndex], v));
 
 window.submitSoloOrdering = () => {
     const q = currentQuiz.q[currentQIndex];
     if (!Array.isArray(window.userOrderSequence) || window.userOrderSequence.length !== q.options.length) return window.showMessage('Подредете всички елементи!', 'error');
-    const isCorrect = JSON.stringify(window.userOrderSequence) === JSON.stringify(q.correct);
+    const isCorrect = isAnswerCorrect(q, window.userOrderSequence);
     window.submitSoloFinal(isCorrect);
 };
 
@@ -1781,7 +1840,7 @@ window.submitSoloTimeline = () => {
     if (!Array.isArray(window.userOrderSequence) || window.userOrderSequence.length !== q.options.length) {
         return window.showMessage('Подредете всички събития!', 'error');
     }
-    const isCorrect = JSON.stringify(window.userOrderSequence) === JSON.stringify(q.correct);
+    const isCorrect = isAnswerCorrect(q, window.userOrderSequence);
     window.submitSoloFinal(isCorrect);
 };
 
