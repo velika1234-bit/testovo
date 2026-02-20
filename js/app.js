@@ -8,6 +8,8 @@ import { formatTime, formatDate, parseScoreValue, decodeQuizCode, AVATARS, getTi
 // Backward-compatible globals (за стари извиквания window.formatDate/window.formatTime)
 window.formatDate = formatDate;
 window.formatTime = formatTime;
+window.decodeQuizCode = decodeQuizCode;
+
 // --- FIREBASE CONFIGURATION ---
 const firebaseConfig = {
     apiKey: "AIzaSyA0WhbnxygznaGCcdxLBHweZZThezUO314",
