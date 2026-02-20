@@ -1557,6 +1557,38 @@ window.initSolvePlayer = () => {
     });
 };
 
+// --- SOLO CONFIRM HELPERS (single/boolean) ---
+window.soloPendingAnswer = null;
+window.selectSoloPending = (val, btnEl) => {
+    window.soloPendingAnswer = val;
+    try {
+        // clear selection styling
+        document.querySelectorAll('#ind-overlay-options .solo-choice').forEach(b => {
+            b.classList.remove('ring-4','ring-indigo-400','bg-white/30');
+        });
+        if (btnEl) btnEl.classList.add('ring-4','ring-indigo-400','bg-white/30');
+        const cbtn = document.getElementById('solo-confirm-btn');
+        if (cbtn) {
+            cbtn.classList.remove('opacity-60','pointer-events-none');
+            cbtn.classList.add('opacity-100');
+        }
+    } catch(e) {}
+};
+window.confirmSoloPending = () => {
+    const v = window.soloPendingAnswer;
+    if (v === null || v === undefined) return;
+    window.soloPendingAnswer = null;
+    // prevent double submit
+    try {
+        const cbtn = document.getElementById('solo-confirm-btn');
+        if (cbtn) {
+            cbtn.classList.add('opacity-60','pointer-events-none');
+            cbtn.classList.remove('opacity-100');
+        }
+    } catch(e) {}
+    window.submitSolo(v);
+};
+
 window.triggerSoloQuestion = (q) => {
     solvePlayer?.pauseVideo();
     const overlay = document.getElementById('ind-overlay');
@@ -1572,11 +1604,17 @@ window.triggerSoloQuestion = (q) => {
     container.innerHTML = '';
 
     if (q.type === 'single') {
-        container.innerHTML = q.options.map((o, i) => `<button onclick="window.submitSolo(${i})" class="w-full p-4 text-left bg-white/10 border border-white/20 rounded-2xl font-black text-white hover:bg-white/20 transition-all text-sm">${o}</button>`).join('');
+        window.soloPendingAnswer = null;
+        container.innerHTML = q.options.map((o, i) => `<button onclick="window.selectSoloPending(${i}, this)" class="solo-choice w-full p-4 text-left bg-white/10 border border-white/20 rounded-2xl font-black text-white hover:bg-white/20 transition-all text-sm">${o}</button>`).join('')
+            + `<button id="solo-confirm-btn" onclick="window.confirmSoloPending()" class="w-full mt-4 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs opacity-60 pointer-events-none">Потвърди избора</button>`;
     } else if (q.type === 'multiple') {
         container.innerHTML = q.options.map((o, i) => `<label class="flex items-center gap-4 w-full p-4 bg-white/10 border border-white/20 rounded-2xl font-black text-white cursor-pointer text-sm mb-2"><input type="checkbox" name="s-multiple" value="${i}" class="w-5 h-5"> ${o}</label>`).join('') + `<button onclick="window.submitSoloMultiple()" class="w-full mt-4 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs">Изпрати</button>`;
     } else if (q.type === 'boolean') {
-        container.innerHTML = `<div class="grid grid-cols-2 gap-4"><button onclick="window.submitSolo(true)" class="p-10 bg-emerald-500/80 rounded-3xl font-black border border-white/30 text-white text-2xl">ДА</button><button onclick="window.submitSolo(false)" class="p-10 bg-rose-500/80 rounded-3xl font-black border border-white/30 text-white text-2xl">НЕ</button></div>`;
+        window.soloPendingAnswer = null;
+        container.innerHTML = `<div class="grid grid-cols-2 gap-4">
+            <button onclick="window.selectSoloPending(true, this)" class="solo-choice p-10 bg-emerald-500/80 rounded-3xl font-black border border-white/30 text-white text-2xl">ДА</button>
+            <button onclick="window.selectSoloPending(false, this)" class="solo-choice p-10 bg-rose-500/80 rounded-3xl font-black border border-white/30 text-white text-2xl">НЕ</button>
+        </div>` + `<button id="solo-confirm-btn" onclick="window.confirmSoloPending()" class="w-full mt-4 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs opacity-60 pointer-events-none">Потвърди избора</button>`;
     } else if (q.type === 'open') {
         container.innerHTML = `<input type="text" id="s-open-answer" placeholder="Отговор..." class="w-full p-6 bg-white/10 border border-white/20 rounded-2xl font-black text-white text-xl outline-none mb-4 text-center"><button onclick="window.submitSoloOpen()" class="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs">Изпрати</button>`;
     } else if (q.type === 'ordering') {
@@ -2160,3 +2198,4 @@ window.onYouTubeIframeAPIReady = function() {
     isYTReady = true;
     console.log("YouTube API Ready");
 };
+
