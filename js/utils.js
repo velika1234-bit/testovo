@@ -2,6 +2,20 @@
 // VideoQuiz Ultimate - Helper функции
 // ============================================
 
+const BG_DATE_FORMAT_OPTIONS = {
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+};
+
+const decodeBase64Utf8 = (base64Value) => {
+    const binary = atob(base64Value);
+    const bytes = Uint8Array.from(binary, ch => ch.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+};
+
 // --- Време и дата ---
 export const formatTime = (s) => {
     const m = Math.floor(s / 60), r = Math.floor(s % 60);
@@ -11,10 +25,7 @@ export const formatTime = (s) => {
 export const formatDate = (timestamp) => {
     if (!timestamp) return '-';
     const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-    return date.toLocaleString('bg-BG', {
-        day: '2-digit', month: '2-digit', year: '2-digit',
-        hour: '2-digit', minute: '2-digit'
-    });
+    return date.toLocaleString('bg-BG', BG_DATE_FORMAT_OPTIONS);
 };
 
 const getTimestampMs = (value) => {
@@ -40,7 +51,7 @@ export const decodeQuizCode = (code) => {
     if (!code) return null;
     try {
         const cleanCode = code.trim().replace(/\s/g, '');
-        return JSON.parse(decodeURIComponent(escape(atob(cleanCode))));
+        return JSON.parse(decodeBase64Utf8(cleanCode));
     } catch (e) {
         try { return JSON.parse(atob(code.trim())); } catch(err) { return null; }
     }
@@ -71,12 +82,16 @@ export const generateQRCode = (text, size = 200) => {
         qr.addData(text);
         qr.make();
         const canvas = document.createElement('canvas');
-        const cellSize = 4;
-        canvas.width = qr.getModuleCount() * cellSize;
-        canvas.height = qr.getModuleCount() * cellSize;
+        const moduleCount = qr.getModuleCount();
+        const cellSize = Math.max(1, Math.floor(size / moduleCount));
+        const canvasSize = moduleCount * cellSize;
+        canvas.width = canvasSize;
+        canvas.height = canvasSize;
         const ctx = canvas.getContext('2d');
-        for (let row = 0; row < qr.getModuleCount(); row++) {
-            for (let col = 0; col < qr.getModuleCount(); col++) {
+        if (!ctx) return null;
+
+        for (let row = 0; row < moduleCount; row++) {
+            for (let col = 0; col < moduleCount; col++) {
                 ctx.fillStyle = qr.isDark(row, col) ? '#000000' : '#ffffff';
                 ctx.fillRect(col * cellSize, row * cellSize, cellSize, cellSize);
             }
