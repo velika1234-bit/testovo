@@ -1032,7 +1032,9 @@ function getLiveSessionTeacherHighlights() {
     if (!participants.length) {
         return {
             topScorer: '-',
-            mostActive: '-'
+            mostActive: '-',
+            atRiskCount: 0,
+            atRiskList: ''
         };
     }
 
