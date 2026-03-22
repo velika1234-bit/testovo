@@ -57,6 +57,11 @@ let participantStorageMode = 'legacy';
 let rulesModalShown = false;
 let sopModeEnabled = false;
 let isDiscussionMode = false;
+const RISK_THRESHOLDS = {
+    minEngagementPct: 60,
+    minAccuracyPct: 50,
+    minScorePct: 40
+};
 
 // Helper functions for Firestore paths
 const getTeacherSoloResultsCollection = (teacherId) => collection(db, 'artifacts', finalAppId, 'users', teacherId, 'solo_results');
@@ -838,10 +843,16 @@ function renderHostDashboard() {
         const givenAnswers = Object.values(answersObj).filter(v => v === true || v === false).length;
         const correctAnswers = Object.values(answersObj).filter(v => v === true).length;
         const accuracy = givenAnswers > 0 ? Math.round((correctAnswers / givenAnswers) * 100) : 0;
+        const engagementPct = quizQuestions.length > 0 ? Math.round((givenAnswers / quizQuestions.length) * 100) : 0;
+        const scorePct = totalMax > 0 ? Math.round(((p.score || 0) / totalMax) * 100) : 0;
 
         const reactionValues = Object.values(p.reactionMs || {}).filter(v => typeof v === 'number' && v >= 0);
         const bestReactionMs = reactionValues.length ? Math.min(...reactionValues) : null;
-        return { ...p, givenAnswers, correctAnswers, accuracy, bestReactionMs };
+        const riskSignals = [];
+        if (engagementPct < RISK_THRESHOLDS.minEngagementPct) riskSignals.push('ниска активност');
+        if (accuracy < RISK_THRESHOLDS.minAccuracyPct) riskSignals.push('ниска точност');
+        if (scorePct < RISK_THRESHOLDS.minScorePct) riskSignals.push('нисък резултат');
+        return { ...p, givenAnswers, correctAnswers, accuracy, bestReactionMs, riskSignals };
     }).sort((a, b) => (b.score - a.score) || (b.accuracy - a.accuracy));
 
     document.getElementById('host-results-body').innerHTML = leaderboard
@@ -852,8 +863,10 @@ function renderHostDashboard() {
                     <span class="text-slate-300 w-5">${idx+1}.</span>
                     <span class="text-lg">${p.avatar || '👤'}</span>
                     <span class="truncate">${p.name}</span>
+                    ${p.riskSignals.length > 0 ? `<span class="text-[9px] font-black uppercase bg-amber-100 text-amber-700 px-2 py-1 rounded-lg">⚠ Риск</span>` : ''}
                 </div>
                 <div class="mt-1 text-[10px] text-slate-400 font-bold">Отг.: ${p.givenAnswers}/${quizQuestions.length || 0} · Точност: ${p.accuracy}%${p.bestReactionMs !== null ? ` · ⚡ ${(p.bestReactionMs / 1000).toFixed(2)}s` : ''}</div>
+                ${p.riskSignals.length > 0 ? `<div class="mt-1 text-[10px] text-amber-600 font-bold">Рискови сигнали: ${p.riskSignals.join(', ')}</div>` : ''}
             </td>
             <td class="py-3 px-3 text-right"><span class="bg-indigo-100 text-indigo-600 px-3 py-1 rounded-xl font-black text-xs sm:text-sm">${p.score} / ${totalMax || 0}</span></td>
             <td class="py-3 px-2 text-center">
@@ -882,17 +895,34 @@ function getResultsData() {
     if (!currentQuiz || !lastFetchedParticipants) return [];
 
     const totalMax = currentQuiz.q.reduce((a, b) => a + (b.points || 1), 0);
+    const totalQuestions = currentQuiz.q.length || 0;
+
+    const getReactionSummary = (participant) => {
+        const reactionMs = participant?.reactionMs || {};
+        const values = Object.values(reactionMs).filter((v) => typeof v === 'number' && Number.isFinite(v) && v >= 0);
+        if (values.length === 0) {
+            return { answeredCount: 0, avgReactionSeconds: '-' };
+        }
+        const avgMs = Math.round(values.reduce((a, b) => a + b, 0) / values.length);
+        return {
+            answeredCount: values.length,
+            avgReactionSeconds: (avgMs / 1000).toFixed(2)
+        };
+    };
 
     let data = [];
-    let header = ["Позиция", "Име", `Точки (Макс: ${totalMax})`];
+    let header = ["Позиция", "Име", `Точки (Макс: ${totalMax})`, "Отговорени", "Средна реакция (s)"];
     currentQuiz.q.forEach((_, idx) => header.push(`Въпрос ${idx + 1}`));
     data.push(header);
 
     [...lastFetchedParticipants].sort((a,b)=>b.score-a.score).forEach((p,i) => {
+        const reactionSummary = getReactionSummary(p);
         let row = [
             (i+1),
             p.name,
-            p.score
+            p.score,
+            `${reactionSummary.answeredCount}/${totalQuestions}`,
+            reactionSummary.avgReactionSeconds
         ];
 
         currentQuiz.q.forEach((_, qIdx) => {
@@ -949,6 +979,9 @@ function getClassQuestionStats() {
         const missing = Math.max(0, participantsCount - answered);
         const correctPct = answered > 0 ? Math.round((correct / answered) * 100) : 0;
         const wrongPct = answered > 0 ? Math.round((wrong / answered) * 100) : 0;
+        const responseRatePct = participantsCount > 0 ? Math.round((answered / participantsCount) * 100) : 0;
+        const classCorrectPct = participantsCount > 0 ? Math.round((correct / participantsCount) * 100) : 0;
+        const classWrongPct = participantsCount > 0 ? Math.round((wrong / participantsCount) * 100) : 0;
 
         return {
             qIdx,
@@ -960,6 +993,9 @@ function getClassQuestionStats() {
             participantsCount,
             correctPct,
             wrongPct,
+            responseRatePct,
+            classCorrectPct,
+            classWrongPct,
             firstCorrectName,
             firstCorrectSeconds: firstCorrectMs !== null ? (firstCorrectMs / 1000).toFixed(2) : '-'
         };
@@ -967,20 +1003,73 @@ function getClassQuestionStats() {
 
     const totalCorrect = stats.reduce((a, r) => a + r.correct, 0);
     const totalWrong = stats.reduce((a, r) => a + r.wrong, 0);
+    const totalMissing = stats.reduce((a, r) => a + r.missing, 0);
     const totalAnswered = totalCorrect + totalWrong;
     const classCorrectPct = totalAnswered > 0 ? Math.round((totalCorrect / totalAnswered) * 100) : 0;
     const classWrongPct = totalAnswered > 0 ? Math.round((totalWrong / totalAnswered) * 100) : 0;
+    const expectedAnswers = participantsCount * stats.length;
+    const answerCoveragePct = expectedAnswers > 0 ? Math.round((totalAnswered / expectedAnswers) * 100) : 0;
 
     return {
         rows: stats,
         summary: {
             participantsCount,
+            questionsCount: stats.length,
+            expectedAnswers,
             totalAnswered,
+            totalMissing,
             totalCorrect,
             totalWrong,
             classCorrectPct,
-            classWrongPct
+            classWrongPct,
+            answerCoveragePct
         }
+    };
+}
+
+function getLiveSessionTeacherHighlights() {
+    const participants = [...(lastFetchedParticipants || [])];
+    if (!participants.length) {
+        return {
+            topScorer: '-',
+            mostActive: '-'
+        };
+    }
+
+    const sortedByScore = [...participants].sort((a, b) => (b.score || 0) - (a.score || 0));
+    const topScorer = sortedByScore[0]?.name || 'Участник';
+
+    const getAnsweredCount = (participant) => {
+        const answers = participant?.answers || {};
+        return Object.values(answers).filter((v) => v === true || v === false).length;
+    };
+    const sortedByActivity = [...participants].sort((a, b) => getAnsweredCount(b) - getAnsweredCount(a));
+    const mostActiveName = sortedByActivity[0]?.name || 'Участник';
+    const mostActiveCount = getAnsweredCount(sortedByActivity[0]);
+
+    const totalQuestions = currentQuiz?.q?.length || 0;
+    const totalMaxPoints = (currentQuiz?.q || []).reduce((sum, q) => sum + (q.points || 1), 0);
+    const atRisk = participants
+        .map((participant) => {
+            const answers = participant?.answers || {};
+            const givenAnswers = Object.values(answers).filter((v) => v === true || v === false).length;
+            const correctAnswers = Object.values(answers).filter((v) => v === true).length;
+            const engagementPct = totalQuestions > 0 ? Math.round((givenAnswers / totalQuestions) * 100) : 0;
+            const accuracyPct = givenAnswers > 0 ? Math.round((correctAnswers / givenAnswers) * 100) : 0;
+            const scorePct = totalMaxPoints > 0 ? Math.round(((participant.score || 0) / totalMaxPoints) * 100) : 0;
+            const flags = [];
+            if (engagementPct < RISK_THRESHOLDS.minEngagementPct) flags.push('активност');
+            if (accuracyPct < RISK_THRESHOLDS.minAccuracyPct) flags.push('точност');
+            if (scorePct < RISK_THRESHOLDS.minScorePct) flags.push('резултат');
+            return flags.length > 0 ? `${participant.name || 'Участник'} (${flags.join('/')})` : null;
+        })
+        .filter(Boolean);
+
+    return {
+        topScorer,
+        mostActive: `${mostActiveName} (${mostActiveCount})`,
+        atRiskCount: atRisk.length,
+        atRiskList: atRisk.slice(0, 5).join(', ')
     };
 }
 
@@ -1068,6 +1157,7 @@ window.exportExcel = () => {
     if (data.length === 0) return window.showMessage("Няма данни за експорт.", "error");
 
     const analytics = getClassQuestionStats();
+    const highlights = getLiveSessionTeacherHighlights();
     const wb = XLSX.utils.book_new();
 
     const wsResults = XLSX.utils.aoa_to_sheet(data);
@@ -1076,21 +1166,32 @@ window.exportExcel = () => {
     const summaryRows = [
         ["СЕСИЯ", sessionID],
         ["УЧАСТНИЦИ", analytics.summary?.participantsCount ?? 0],
+        ["ВЪПРОСИ", analytics.summary?.questionsCount ?? 0],
+        ["ОЧАКВАНИ ОТГОВОРИ", analytics.summary?.expectedAnswers ?? 0],
         ["ОБЩО ОТГОВОРИ", analytics.summary?.totalAnswered ?? 0],
+        ["БЕЗ ОТГОВОР", analytics.summary?.totalMissing ?? 0],
+        ["ПОКРИТИЕ НА ОТГОВОРИТЕ", `${analytics.summary?.answerCoveragePct ?? 0}%`],
         ["ВЕРНИ", `${analytics.summary?.totalCorrect ?? 0} (${analytics.summary?.classCorrectPct ?? 0}%)`],
         ["ГРЕШНИ", `${analytics.summary?.totalWrong ?? 0} (${analytics.summary?.classWrongPct ?? 0}%)`],
+        ["ТОП РЕЗУЛТАТ", highlights.topScorer],
+        ["НАЙ-АКТИВЕН", highlights.mostActive],
+        ["РИСКОВИ УЧЕНИЦИ", highlights.atRiskCount],
+        ["РИСКОВ СПИСЪК (TOP 5)", highlights.atRiskList || "-"],
         []
     ];
 
-    const questionHeader = ["Въпрос", "Текст", "Верни", "Грешни", "Без отговор", "% Верни", "% Грешни", "Първи верен", "Време (s)"];
+    const questionHeader = ["Въпрос", "Текст", "Верни", "Грешни", "Без отговор", "Активност", "% Верни (отговорили)", "% Грешни (отговорили)", "% Верни (клас)", "% Грешни (клас)", "Първи верен", "Време (s)"];
     const questionRows = analytics.rows.map((r) => [
         r.qIdx + 1,
         r.questionText,
         r.correct,
         r.wrong,
         r.missing,
+        `${r.responseRatePct}%`,
         `${r.correctPct}%`,
         `${r.wrongPct}%`,
+        `${r.classCorrectPct}%`,
+        `${r.classWrongPct}%`,
         r.firstCorrectName,
         r.firstCorrectSeconds
     ]);
@@ -1109,6 +1210,7 @@ window.exportPDF = () => {
   if (!data || data.length === 0) return window.showMessage("Няма данни за PDF експорт.", "error");
 
   const analytics = getClassQuestionStats?.() || { rows: [] };
+  const highlights = getLiveSessionTeacherHighlights();
 
   // data is like: [headRow, ...bodyRows]
   const [head, ...body] = data;
@@ -1162,15 +1264,18 @@ window.exportPDF = () => {
     `;
   };
 
-  const analyticsHead = ['№','Въпрос','Верни','Грешни','Без отговор','% Верни','% Грешни','Първи верен','Време (s)'];
+  const analyticsHead = ['№','Въпрос','Верни','Грешни','Без отговор','Активност','% Верни (отговорили)','% Грешни (отговорили)','% Верни (клас)','% Грешни (клас)','Първи верен','Време (s)'];
   const analyticsBody = (analytics.rows || []).map(r => ([
     String((r.qIdx ?? 0) + 1),
     r.questionText ?? "",
     String(r.correct ?? 0),
     String(r.wrong ?? 0),
     String(r.missing ?? 0),
+    `${r.responseRatePct ?? 0}%`,
     `${r.correctPct ?? 0}%`,
     `${r.wrongPct ?? 0}%`,
+    `${r.classCorrectPct ?? 0}%`,
+    `${r.classWrongPct ?? 0}%`,
     r.firstCorrectName ?? "—",
     String(r.firstCorrectSeconds ?? "—")
   ]));
@@ -1200,6 +1305,12 @@ window.exportPDF = () => {
 
   <div class="summary">
     <div>• Брой участници: <b>${esc(body.length)}</b></div>
+    <div>• Брой въпроси: <b>${esc(analytics.summary?.questionsCount ?? 0)}</b></div>
+    <div>• Покритие на отговорите: <b>${esc(analytics.summary?.answerCoveragePct ?? 0)}%</b></div>
+    <div>• Топ резултат: <b>${esc(highlights.topScorer)}</b></div>
+    <div>• Най-активен: <b>${esc(highlights.mostActive)}</b></div>
+    <div>• Рискови ученици: <b>${esc(highlights.atRiskCount ?? 0)}</b></div>
+    ${highlights.atRiskList ? `<div>• Рисков списък (TOP 5): <b>${esc(highlights.atRiskList)}</b></div>` : ""}
     ${avgPct === null ? "" : `<div>• Среден успех на класа: <b>${avgPct}%</b></div>`}
   </div>
 
@@ -2341,4 +2452,3 @@ window.onYouTubeIframeAPIReady = function() {
     isYTReady = true;
     console.log("YouTube API Ready");
 };
-
