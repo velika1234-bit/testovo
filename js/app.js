@@ -949,6 +949,9 @@ function getClassQuestionStats() {
         const missing = Math.max(0, participantsCount - answered);
         const correctPct = answered > 0 ? Math.round((correct / answered) * 100) : 0;
         const wrongPct = answered > 0 ? Math.round((wrong / answered) * 100) : 0;
+        const responseRatePct = participantsCount > 0 ? Math.round((answered / participantsCount) * 100) : 0;
+        const classCorrectPct = participantsCount > 0 ? Math.round((correct / participantsCount) * 100) : 0;
+        const classWrongPct = participantsCount > 0 ? Math.round((wrong / participantsCount) * 100) : 0;
 
         return {
             qIdx,
@@ -960,6 +963,9 @@ function getClassQuestionStats() {
             participantsCount,
             correctPct,
             wrongPct,
+            responseRatePct,
+            classCorrectPct,
+            classWrongPct,
             firstCorrectName,
             firstCorrectSeconds: firstCorrectMs !== null ? (firstCorrectMs / 1000).toFixed(2) : '-'
         };
@@ -967,19 +973,26 @@ function getClassQuestionStats() {
 
     const totalCorrect = stats.reduce((a, r) => a + r.correct, 0);
     const totalWrong = stats.reduce((a, r) => a + r.wrong, 0);
+    const totalMissing = stats.reduce((a, r) => a + r.missing, 0);
     const totalAnswered = totalCorrect + totalWrong;
     const classCorrectPct = totalAnswered > 0 ? Math.round((totalCorrect / totalAnswered) * 100) : 0;
     const classWrongPct = totalAnswered > 0 ? Math.round((totalWrong / totalAnswered) * 100) : 0;
+    const expectedAnswers = participantsCount * stats.length;
+    const answerCoveragePct = expectedAnswers > 0 ? Math.round((totalAnswered / expectedAnswers) * 100) : 0;
 
     return {
         rows: stats,
         summary: {
             participantsCount,
+            questionsCount: stats.length,
+            expectedAnswers,
             totalAnswered,
+            totalMissing,
             totalCorrect,
             totalWrong,
             classCorrectPct,
-            classWrongPct
+            classWrongPct,
+            answerCoveragePct
         }
     };
 }
@@ -1076,21 +1089,28 @@ window.exportExcel = () => {
     const summaryRows = [
         ["СЕСИЯ", sessionID],
         ["УЧАСТНИЦИ", analytics.summary?.participantsCount ?? 0],
+        ["ВЪПРОСИ", analytics.summary?.questionsCount ?? 0],
+        ["ОЧАКВАНИ ОТГОВОРИ", analytics.summary?.expectedAnswers ?? 0],
         ["ОБЩО ОТГОВОРИ", analytics.summary?.totalAnswered ?? 0],
+        ["БЕЗ ОТГОВОР", analytics.summary?.totalMissing ?? 0],
+        ["ПОКРИТИЕ НА ОТГОВОРИТЕ", `${analytics.summary?.answerCoveragePct ?? 0}%`],
         ["ВЕРНИ", `${analytics.summary?.totalCorrect ?? 0} (${analytics.summary?.classCorrectPct ?? 0}%)`],
         ["ГРЕШНИ", `${analytics.summary?.totalWrong ?? 0} (${analytics.summary?.classWrongPct ?? 0}%)`],
         []
     ];
 
-    const questionHeader = ["Въпрос", "Текст", "Верни", "Грешни", "Без отговор", "% Верни", "% Грешни", "Първи верен", "Време (s)"];
+    const questionHeader = ["Въпрос", "Текст", "Верни", "Грешни", "Без отговор", "Активност", "% Верни (отговорили)", "% Грешни (отговорили)", "% Верни (клас)", "% Грешни (клас)", "Първи верен", "Време (s)"];
     const questionRows = analytics.rows.map((r) => [
         r.qIdx + 1,
         r.questionText,
         r.correct,
         r.wrong,
         r.missing,
+        `${r.responseRatePct}%`,
         `${r.correctPct}%`,
         `${r.wrongPct}%`,
+        `${r.classCorrectPct}%`,
+        `${r.classWrongPct}%`,
         r.firstCorrectName,
         r.firstCorrectSeconds
     ]);
@@ -1162,15 +1182,18 @@ window.exportPDF = () => {
     `;
   };
 
-  const analyticsHead = ['№','Въпрос','Верни','Грешни','Без отговор','% Верни','% Грешни','Първи верен','Време (s)'];
+  const analyticsHead = ['№','Въпрос','Верни','Грешни','Без отговор','Активност','% Верни (отговорили)','% Грешни (отговорили)','% Верни (клас)','% Грешни (клас)','Първи верен','Време (s)'];
   const analyticsBody = (analytics.rows || []).map(r => ([
     String((r.qIdx ?? 0) + 1),
     r.questionText ?? "",
     String(r.correct ?? 0),
     String(r.wrong ?? 0),
     String(r.missing ?? 0),
+    `${r.responseRatePct ?? 0}%`,
     `${r.correctPct ?? 0}%`,
     `${r.wrongPct ?? 0}%`,
+    `${r.classCorrectPct ?? 0}%`,
+    `${r.classWrongPct ?? 0}%`,
     r.firstCorrectName ?? "—",
     String(r.firstCorrectSeconds ?? "—")
   ]));
@@ -1200,6 +1223,8 @@ window.exportPDF = () => {
 
   <div class="summary">
     <div>• Брой участници: <b>${esc(body.length)}</b></div>
+    <div>• Брой въпроси: <b>${esc(analytics.summary?.questionsCount ?? 0)}</b></div>
+    <div>• Покритие на отговорите: <b>${esc(analytics.summary?.answerCoveragePct ?? 0)}%</b></div>
     ${avgPct === null ? "" : `<div>• Среден успех на класа: <b>${avgPct}%</b></div>`}
   </div>
 
@@ -2341,4 +2366,3 @@ window.onYouTubeIframeAPIReady = function() {
     isYTReady = true;
     console.log("YouTube API Ready");
 };
-
