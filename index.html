@@ -97,6 +97,11 @@
                     <h3 class="text-base font-black flex items-center gap-2 text-indigo-600 px-2"><i data-lucide="users"></i> Резултати</h3>
                     <div class="flex items-center justify-between gap-3 px-2">
                         <p id="solo-results-summary" class="text-[11px] text-slate-400 font-bold">Все още няма резултати за този профил.</p>
+                        <select id="results-filter" onchange="window.setResultsFilter(this.value)" class="shrink-0 bg-white border border-slate-200 rounded-xl px-3 py-2 text-[10px] font-black uppercase text-slate-500">
+                            <option value="all">Всички</option>
+                            <option value="solo">Само SOLO</option>
+                            <option value="live">Само LIVE</option>
+                        </select>
                     </div>
                     <div class="bg-white rounded-[2.5rem] border shadow-sm h-[450px] overflow-hidden flex flex-col">
                         <div class="overflow-y-auto flex-1 custom-scrollbar">

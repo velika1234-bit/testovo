@@ -48,6 +48,7 @@ let scoreCount = 0, currentQIndex = -1;
 let lastFetchedParticipants = [];
 let soloResults = [];
 let liveReports = [];
+let resultsFilter = 'all';
 let myQuizzes = [];
 let isYTReady = false;
 let authMode = 'login';
@@ -658,6 +659,17 @@ window.downloadLiveReport = (id) => {
     downloadJsonFile(`live_report_${item.sessionId || item.id}_${stamp}.json`, item);
 };
 
+window.setResultsFilter = (filterValue) => {
+    if (!['all', 'solo', 'live'].includes(filterValue)) return;
+    resultsFilter = filterValue;
+    renderSoloResults();
+};
+
+const getResultsFilterElement = () =>
+    document.getElementById('results-filter') ||
+    document.getElementById('resultsFilter') ||
+    document.getElementById('filterSelect');
+
 function renderMyQuizzes() {
     const container = document.getElementById('my-quizzes-list');
     if (!container) return;
@@ -681,12 +693,17 @@ function renderMyQuizzes() {
 function renderSoloResults() {
     const body = document.getElementById('solo-results-body');
     if (!body) return;
+    const filterSelect = getResultsFilterElement();
+    if (filterSelect) filterSelect.value = resultsFilter;
 
     const combinedRecords = [
         ...soloResults.map((r) => ({ ...r, _kind: 'solo', _sortTs: getTimestampMs(r.timestamp) })),
         ...liveReports.map((r) => ({ ...r, _kind: 'live', _sortTs: Number(r.timestampMs || 0) }))
     ];
-    const sortedResults = combinedRecords.sort((a, b) => b._sortTs - a._sortTs);
+    const filtered = resultsFilter === 'all'
+        ? combinedRecords
+        : combinedRecords.filter((r) => r._kind === resultsFilter);
+    const sortedResults = filtered.sort((a, b) => b._sortTs - a._sortTs);
     const summaryEl = document.getElementById('solo-results-summary');
     if (summaryEl) {
         const soloOnly = sortedResults.filter((r) => r._kind === 'solo');
