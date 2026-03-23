@@ -1691,6 +1691,7 @@ window.submitLiveFinal = async (isCorrect) => {
         lastAnsweredIdx: liveActiveQIdx,
         lastResult: isCorrect
     };
+    const explanationText = window.currentLiveQ?.explanation ? String(window.currentLiveQ.explanation).trim() : '';
     const reactionMs = window.currentLiveQStartedAtMs ? Math.max(0, Date.now() - window.currentLiveQStartedAtMs) : null;
     updatePayload[`answers.${liveActiveQIdx}`] = isCorrect;
     if (reactionMs !== null) updatePayload[`reactionMs.${liveActiveQIdx}`] = reactionMs;
@@ -1698,7 +1699,10 @@ window.submitLiveFinal = async (isCorrect) => {
     try {
         if (currentParticipantRef) {
             await updateDoc(currentParticipantRef, updatePayload);
-            document.getElementById('waiting-status-text').innerText = isCorrect ? "ВЕРЕН ОТГОВОР! ✨" : "ГРЕШЕН ОТГОВОР... ❌";
+            const baseMsg = isCorrect ? "ВЕРЕН ОТГОВОР! ✨" : "ГРЕШЕН ОТГОВОР... ❌";
+            document.getElementById('waiting-status-text').innerHTML = explanationText
+                ? `<div class="space-y-2"><div>${baseMsg}</div><div class="text-xs text-amber-200 font-bold">💡 ${explanationText}</div></div>`
+                : baseMsg;
         }
     } catch (e) {
         console.error(e);
@@ -1962,7 +1966,12 @@ window.submitSoloFinal(isCorrect);
 };
 
 window.submitSoloFinal = (isCorrect) => {
+    const explanationText = currentQuiz?.q?.[currentQIndex]?.explanation ? String(currentQuiz.q[currentQIndex].explanation).trim() : '';
     if (isCorrect) scoreCount += (currentQuiz.q[currentQIndex].points || 1);
+    if (explanationText) {
+        const label = isCorrect ? "✅ Вярно." : "❌ Невярно.";
+        window.showMessage(`${label} 💡 ${explanationText}`, isCorrect ? 'info' : 'error');
+    }
     stopSpeechReader();
     document.getElementById('ind-overlay').classList.add('hidden');
     document.getElementById('ind-overlay').classList.remove('flex');
@@ -2141,6 +2150,8 @@ window.openQuestionModal = () => {
     editingQuestionIndex = null;
     document.getElementById('m-title-text').innerText = "Нов въпрос";
     document.getElementById('m-text').value = '';
+    const explanationInput = document.getElementById('m-explanation');
+    if (explanationInput) explanationInput.value = '';
     document.getElementById('modal-q').classList.remove('hidden');
     document.getElementById('modal-q').classList.add('flex');
     document.getElementById('m-time').innerText = formatTime(player.getCurrentTime());
@@ -2217,6 +2228,8 @@ window.saveQuestion = () => {
     if (!text) return window.showMessage("Въведете текст!", "error");
     let timeVal = editingQuestionIndex !== null ? questions[editingQuestionIndex].time : Math.floor(player.getCurrentTime());
     let qData = { time: timeVal, text, type, points: parseInt(document.getElementById('m-points').value) || 1 };
+    const explanation = document.getElementById('m-explanation')?.value.trim();
+    if (explanation) qData.explanation = explanation;
 
     if (type === 'single' || type === 'multiple' || type === 'ordering' || type === 'timeline') {
         const rows = Array.from(document.querySelectorAll('#m-opts-list .option-row'));
@@ -2274,6 +2287,8 @@ window.editQuestionContent = (index) => {
     document.getElementById('m-text').value = q.text;
     document.getElementById('m-type').value = q.type;
     document.getElementById('m-points').value = q.points || 1;
+    const explanationInput = document.getElementById('m-explanation');
+    if (explanationInput) explanationInput.value = q.explanation || '';
     document.getElementById('m-time').innerText = formatTime(q.time);
     document.getElementById('modal-q').classList.remove('hidden');
     document.getElementById('modal-q').classList.add('flex');
@@ -2334,6 +2349,7 @@ function renderEditorList() {
                 ${q.type === 'open' ? '✏️ Отворен отговор' : ''}
                 ${q.type === 'ordering' ? '↕️ Подреждане' : ''}
             </div>
+            ${q.explanation ? `<div class="text-[10px] text-amber-700 font-bold bg-amber-50 border border-amber-100 rounded-lg px-2 py-1">💡 ${q.explanation}</div>` : ''}
         </div>
     `).join('') || '<p class="text-center text-slate-300 italic py-6 text-xs">Добавете въпроси.</p>';
     if (window.lucide) lucide.createIcons();
