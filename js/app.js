@@ -59,6 +59,7 @@ let participantStorageMode = 'legacy';
 let rulesModalShown = false;
 let sopModeEnabled = false;
 let isDiscussionMode = false;
+let hostLeaderboardExpanded = false;
 const RISK_THRESHOLDS = {
     minEngagementPct: 60,
     minAccuracyPct: 50,
@@ -675,6 +676,8 @@ const getResultsFilterElement = () =>
     document.getElementById('resultsFilter') ||
     document.getElementById('filterSelect');
 
+// Merge-note: keep this helper + single usage in renderSoloResults().
+// It avoids duplicate inline sort lines in conflict editors and keeps sorting non-mutating.
 const sortRecordsByTimestampDesc = (records) => [...records].sort((a, b) => b._sortTs - a._sortTs);
 
 function renderMyQuizzes() {
@@ -787,6 +790,8 @@ const renderHostSessionQRCode = (pin) => {
     const joinUrl = `${window.location.origin}${window.location.pathname}?join=${encodeURIComponent(pin)}`;
     const qrDataUrl = generateQRCode(joinUrl, 180);
     if (!qrDataUrl) {
+        // Merge-note: keep fallback link visible (do NOT hide qrContainer on failure),
+        // otherwise teacher sees no join affordance when QR generation fails.
         qrCodeEl.innerHTML = `<a href="${joinUrl}" target="_blank" rel="noopener" class="text-[11px] font-black text-indigo-600 underline break-all">Вход линк: ${joinUrl}</a>`;
         qrContainer.classList.remove('hidden');
         return;
@@ -800,6 +805,7 @@ window.openLiveHost = async () => {
     if (!user) return;
     sessionID = await createUniqueSessionPin();
     sessionDocId = sessionID;
+    hostLeaderboardExpanded = false;
     window.switchScreen('live-host');
     document.getElementById('host-pin').innerText = sessionID;
     renderHostSessionQRCode(sessionID);
@@ -979,7 +985,10 @@ function renderHostDashboard() {
         return { ...p, givenAnswers, correctAnswers, accuracy, bestReactionMs, riskSignals };
     }).sort((a, b) => (b.score - a.score) || (b.accuracy - a.accuracy));
 
-    document.getElementById('host-results-body').innerHTML = leaderboard
+    const maxCompactRows = 10;
+    const visibleLeaderboard = hostLeaderboardExpanded ? leaderboard : leaderboard.slice(0, maxCompactRows);
+
+    const rowsHtml = visibleLeaderboard
         .map((p, idx) => `
         <tr class="border-b transition-all hover:bg-slate-50 animate-pop">
             <td class="py-3 px-3 font-black text-xs sm:text-sm">
@@ -990,7 +999,7 @@ function renderHostDashboard() {
                     ${p.riskSignals.length > 0 ? `<span class="text-[9px] font-black uppercase bg-amber-100 text-amber-700 px-2 py-1 rounded-lg">⚠ Риск</span>` : ''}
                 </div>
                 <div class="mt-1 text-[10px] text-slate-400 font-bold">Отг.: ${p.givenAnswers}/${quizQuestions.length || 0} · Точност: ${p.accuracy}%${p.bestReactionMs !== null ? ` · ⚡ ${(p.bestReactionMs / 1000).toFixed(2)}s` : ''}</div>
-                ${p.riskSignals.length > 0 ? `<div class="mt-1 text-[10px] text-amber-600 font-bold">Рискови сигнали: ${p.riskSignals.join(', ')}</div>` : ''}
+                ${hostLeaderboardExpanded && p.riskSignals.length > 0 ? `<div class="mt-1 text-[10px] text-amber-600 font-bold">Рискови сигнали: ${p.riskSignals.join(', ')}</div>` : ''}
             </td>
             <td class="py-3 px-3 text-right"><span class="bg-indigo-100 text-indigo-600 px-3 py-1 rounded-xl font-black text-xs sm:text-sm">${p.score} / ${totalMax || 0}</span></td>
             <td class="py-3 px-2 text-center">
@@ -999,8 +1008,25 @@ function renderHostDashboard() {
                 </button>
             </td>
         </tr>`).join('');
+
+    const toggleRow = leaderboard.length > maxCompactRows
+        ? `<tr>
+            <td colspan="3" class="py-2 px-2 text-center bg-slate-50">
+                <button onclick="window.toggleHostLeaderboard()" class="text-[10px] font-black uppercase text-indigo-600 hover:text-indigo-800">
+                    ${hostLeaderboardExpanded ? `Покажи само топ ${maxCompactRows}` : `Покажи всички (${leaderboard.length})`}
+                </button>
+            </td>
+          </tr>`
+        : '';
+
+    document.getElementById('host-results-body').innerHTML = rowsHtml + toggleRow;
     if (window.lucide) lucide.createIcons();
 }
+
+window.toggleHostLeaderboard = () => {
+    hostLeaderboardExpanded = !hostLeaderboardExpanded;
+    renderHostDashboard();
+};
 
 window.finishLiveSession = async () => {
     if (!sessionID) return;
