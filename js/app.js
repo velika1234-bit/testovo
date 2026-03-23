@@ -665,6 +665,11 @@ window.setResultsFilter = (filterValue) => {
     renderSoloResults();
 };
 
+const getResultsFilterElement = () =>
+    document.getElementById('results-filter') ||
+    document.getElementById('resultsFilter') ||
+    document.getElementById('filterSelect');
+
 function renderMyQuizzes() {
     const container = document.getElementById('my-quizzes-list');
     if (!container) return;
@@ -688,7 +693,7 @@ function renderMyQuizzes() {
 function renderSoloResults() {
     const body = document.getElementById('solo-results-body');
     if (!body) return;
-    const filterSelect = document.getElementById('results-filter');
+    const filterSelect = getResultsFilterElement();
     if (filterSelect) filterSelect.value = resultsFilter;
 
     const combinedRecords = [
