@@ -3,7 +3,7 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, serverTimest
 import { getAuth, signInAnonymously, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 // --- Импортиране на helper функции от utils.js ---
-import { formatTime, formatDate, parseScoreValue, decodeQuizCode, AVATARS, getTimestampMs } from './utils.js';
+import { formatTime, formatDate, parseScoreValue, decodeQuizCode, AVATARS, getTimestampMs, generateQRCode } from './utils.js';
 
 // Backward-compatible globals (за стари извиквания window.formatDate/window.formatTime)
 window.formatDate = formatDate;
@@ -327,6 +327,7 @@ window.switchScreen = (name) => {
     if (name === 'teacher-dashboard' && user) {
         window.loadMyQuizzes();
         window.loadSoloResults();
+        window.loadLiveReports();
     }
     if (window.lucide) lucide.createIcons();
     window.scrollTo(0, 0);
@@ -348,6 +349,10 @@ window.showMessage = (text, type = 'info') => {
 
 window.quitHostSession = () => {
     if (confirm("Това ще прекъсне сесията и ще спре таймерите. Сигурни ли сте?")) {
+        const qrContainer = document.getElementById('qr-container');
+        const qrCodeEl = document.getElementById('qr-code');
+        if (qrCodeEl) qrCodeEl.innerHTML = '';
+        qrContainer?.classList.add('hidden');
         window.switchScreen('teacher-dashboard');
     }
 };
@@ -703,7 +708,7 @@ function renderSoloResults() {
     const filtered = resultsFilter === 'all'
         ? combinedRecords
         : combinedRecords.filter((r) => r._kind === resultsFilter);
-    const sortedResults = filtered.sort((a, b) => b._sortTs - a._sortTs);
+    const sortedResults = [...filtered].sort((a, b) => b._sortTs - a._sortTs);
     const summaryEl = document.getElementById('solo-results-summary');
     if (summaryEl) {
         const soloOnly = sortedResults.filter((r) => r._kind === 'solo');
@@ -772,12 +777,29 @@ const createUniqueSessionPin = async () => {
     return generateNumericPin(4);
 };
 
+const renderHostSessionQRCode = (pin) => {
+    const qrContainer = document.getElementById('qr-container');
+    const qrCodeEl = document.getElementById('qr-code');
+    if (!qrContainer || !qrCodeEl || !pin) return;
+
+    const joinUrl = `${window.location.origin}${window.location.pathname}?join=${encodeURIComponent(pin)}`;
+    const qrDataUrl = generateQRCode(joinUrl, 180);
+    if (!qrDataUrl) {
+        qrContainer.classList.add('hidden');
+        return;
+    }
+
+    qrCodeEl.innerHTML = `<img src="${qrDataUrl}" alt="QR за вход в live сесия" class="w-[180px] h-[180px] rounded-xl border border-slate-200 bg-white p-2">`;
+    qrContainer.classList.remove('hidden');
+};
+
 window.openLiveHost = async () => {
     if (!user) return;
     sessionID = await createUniqueSessionPin();
     sessionDocId = sessionID;
     window.switchScreen('live-host');
     document.getElementById('host-pin').innerText = sessionID;
+    renderHostSessionQRCode(sessionID);
 
     const totalPoints = currentQuiz.q.reduce((a, q) => a + (q.points || 1), 0);
 
