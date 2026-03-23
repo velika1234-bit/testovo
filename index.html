@@ -97,18 +97,18 @@
                     <h3 class="text-base font-black flex items-center gap-2 text-indigo-600 px-2"><i data-lucide="users"></i> Резултати</h3>
                     <div class="flex items-center justify-between gap-3 px-2">
                         <p id="solo-results-summary" class="text-[11px] text-slate-400 font-bold">Все още няма резултати за този профил.</p>
-                        <button onclick="window.exportSoloResultsExcel()" class="shrink-0 bg-indigo-600 text-white px-3 py-2 rounded-xl font-black uppercase text-[10px] shadow hover:bg-indigo-700 transition-all">Експорт Excel</button>
                     </div>
                     <div class="bg-white rounded-[2.5rem] border shadow-sm h-[450px] overflow-hidden flex flex-col">
                         <div class="overflow-y-auto flex-1 custom-scrollbar">
                             <table class="w-full text-left">
                                 <thead class="sticky top-0 bg-slate-50 font-black text-[9px] uppercase text-slate-400 border-b">
                                     <tr>
-                                        <th class="py-4 px-4">Ученик</th>
+                                        <th class="py-4 px-4">Тип</th>
+                                        <th class="py-4 px-4">Ученик/Сесия</th>
                                         <th class="py-4 px-4">Урок</th>
                                         <th class="py-4 px-4">Дата/Час</th>
                                         <th class="py-4 px-4 text-right">Точки</th>
-                                        <th class="py-4 px-4 text-center">Изтрий</th>
+                                        <th class="py-4 px-4 text-center">Действия</th>
                                     </tr>
                                 </thead>
                                 <tbody id="solo-results-body"></tbody>

@@ -47,6 +47,7 @@ let liveScore = 0;
 let scoreCount = 0, currentQIndex = -1;
 let lastFetchedParticipants = [];
 let soloResults = [];
+let liveReports = [];
 let myQuizzes = [];
 let isYTReady = false;
 let authMode = 'login';
@@ -65,6 +66,7 @@ const RISK_THRESHOLDS = {
 
 // Helper functions for Firestore paths
 const getTeacherSoloResultsCollection = (teacherId) => collection(db, 'artifacts', finalAppId, 'users', teacherId, 'solo_results');
+const getTeacherLiveReportsCollection = (teacherId) => collection(db, 'artifacts', finalAppId, 'users', teacherId, 'live_reports');
 const getTeacherQuizzesCollection = (teacherId, appId = finalAppId) => collection(db, 'artifacts', appId, 'users', teacherId, 'my_quizzes');
 const getSessionRefById = (id) => doc(db, 'artifacts', finalAppId, 'public', 'data', 'sessions', id);
 const getParticipantsCollection = (id) => collection(db, 'artifacts', finalAppId, 'public', 'data', 'sessions', id, 'participants');
@@ -161,6 +163,7 @@ onAuthStateChanged(auth, async (u) => {
     if (lastAuthUid !== incomingUid) {
         myQuizzes = [];
         soloResults = [];
+        liveReports = [];
         if (document.getElementById('my-quizzes-list')) renderMyQuizzes();
         if (document.getElementById('solo-results-body')) renderSoloResults();
         // --- ПОКАЗВАНЕ НА АДМИН БУТОН (само за администратор) ---
@@ -191,6 +194,7 @@ if (adminBtn) {
                 isTeacher = true;
                 window.loadMyQuizzes();
                 window.loadSoloResults();
+                window.loadLiveReports();
                 if (!document.getElementById('screen-welcome').classList.contains('hidden')) {
                     window.switchScreen('teacher-dashboard');
                 }
@@ -576,6 +580,23 @@ window.loadSoloResults = async () => {
     unsubscribes.push(unsub);
 };
 
+window.loadLiveReports = async () => {
+    if (!user) return;
+    liveReports = [];
+    renderSoloResults();
+    const q = getTeacherLiveReportsCollection(user.uid);
+    const unsub = onSnapshot(q, (snap) => {
+        liveReports = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+        renderSoloResults();
+    }, (error) => {
+        console.error("Live reports error:", error);
+        if (error.code === 'permission-denied') window.showRulesHelpModal();
+        liveReports = [];
+        renderSoloResults();
+    });
+    unsubscribes.push(unsub);
+};
+
 window.deleteSoloResult = async (id) => {
     if (!user) return;
     if (confirm("Сигурни ли сте, че искате да изтриете този запис?")) {
@@ -588,6 +609,53 @@ window.deleteSoloResult = async (id) => {
             else window.showMessage("Грешка при изтриване.", "error");
         }
     }
+};
+
+window.deleteLiveReport = async (id) => {
+    if (!user) return;
+    if (!confirm("Сигурни ли сте, че искате да изтриете live рапорта?")) return;
+    try {
+        await deleteDoc(doc(getTeacherLiveReportsCollection(user.uid), id));
+        window.showMessage("Live рапортът е изтрит.", "info");
+    } catch (e) {
+        console.error(e);
+        if (e.code === 'permission-denied') window.showRulesHelpModal();
+        else window.showMessage("Грешка при изтриване.", "error");
+    }
+};
+
+const downloadJsonFile = (fileName, payload) => {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+};
+
+window.downloadSoloResult = (id) => {
+    const item = soloResults.find((r) => r.id === id);
+    if (!item) return window.showMessage("Записът не е намерен.", "error");
+    const payload = {
+        type: 'solo',
+        studentName: item.studentName || '-',
+        quizTitle: item.quizTitle || '-',
+        score: item.score || '-',
+        timestamp: item.timestamp || null,
+        exportedAt: new Date().toISOString()
+    };
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
+    downloadJsonFile(`solo_result_${item.id}_${stamp}.json`, payload);
+};
+
+window.downloadLiveReport = (id) => {
+    const item = liveReports.find((r) => r.id === id);
+    if (!item) return window.showMessage("Рапортът не е намерен.", "error");
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
+    downloadJsonFile(`live_report_${item.sessionId || item.id}_${stamp}.json`, item);
 };
 
 function renderMyQuizzes() {
@@ -614,35 +682,49 @@ function renderSoloResults() {
     const body = document.getElementById('solo-results-body');
     if (!body) return;
 
-    const sortedResults = [...soloResults].sort((a, b) => getTimestampMs(b.timestamp) - getTimestampMs(a.timestamp));
+    const combinedRecords = [
+        ...soloResults.map((r) => ({ ...r, _kind: 'solo', _sortTs: getTimestampMs(r.timestamp) })),
+        ...liveReports.map((r) => ({ ...r, _kind: 'live', _sortTs: Number(r.timestampMs || 0) }))
+    ];
+    const sortedResults = combinedRecords.sort((a, b) => b._sortTs - a._sortTs);
     const summaryEl = document.getElementById('solo-results-summary');
     if (summaryEl) {
-        const totalAttempts = sortedResults.length;
-        const totals = sortedResults.reduce((acc, r) => {
+        const soloOnly = sortedResults.filter((r) => r._kind === 'solo');
+        const liveOnly = sortedResults.filter((r) => r._kind === 'live');
+        const totals = soloOnly.reduce((acc, r) => {
             const parsed = parseScoreValue(r.score);
             acc.score += parsed.score;
             acc.total += parsed.total;
             return acc;
         }, { score: 0, total: 0 });
         const pct = totals.total > 0 ? Math.round((totals.score / totals.total) * 100) : 0;
-        summaryEl.innerText = totalAttempts > 0
-            ? `Опити: ${totalAttempts} • Среден успех: ${pct}% (${totals.score}/${totals.total})`
+        summaryEl.innerText = sortedResults.length > 0
+            ? `Индивидуални: ${soloOnly.length} • Live рапорти: ${liveOnly.length} • Среден успех (solo): ${pct}%`
             : 'Все още няма резултати за този профил.';
     }
 
     body.innerHTML = sortedResults.map(r => `
         <tr class="border-b text-[10px] sm:text-xs hover:bg-slate-50">
-            <td class="py-3 px-4 font-black text-slate-700">${r.studentName}</td>
-            <td class="py-3 px-4 text-slate-500 truncate max-w-[120px]">${r.quizTitle}</td>
-            <td class="py-3 px-4 text-slate-400 font-mono">${formatDate(r.timestamp)}</td>
-            <td class="py-3 px-4 text-right"><span class="bg-indigo-100 text-indigo-600 px-2 py-1 rounded-lg font-black">${r.score}</span></td>
+            <td class="py-3 px-4">
+                ${r._kind === 'live'
+                    ? '<span class="bg-amber-100 text-amber-700 px-2 py-1 rounded-lg font-black">LIVE</span>'
+                    : '<span class="bg-indigo-100 text-indigo-700 px-2 py-1 rounded-lg font-black">SOLO</span>'}
+            </td>
+            <td class="py-3 px-4 font-black text-slate-700">${r._kind === 'live' ? `Сесия ${r.sessionId || '-'}` : (r.studentName || '-')}</td>
+            <td class="py-3 px-4 text-slate-500 truncate max-w-[120px]">${r.quizTitle || '-'}</td>
+            <td class="py-3 px-4 text-slate-400 font-mono">${r._kind === 'live' ? formatDate(r.timestampMs) : formatDate(r.timestamp)}</td>
+            <td class="py-3 px-4 text-right"><span class="bg-indigo-100 text-indigo-600 px-2 py-1 rounded-lg font-black">${r._kind === 'live' ? (r.scoreLabel || '-') : (r.score || '-')}</span></td>
             <td class="py-3 px-4 text-center">
-                <button onclick="window.deleteSoloResult('${r.id}')" class="text-rose-400 hover:text-rose-600 p-2 rounded-lg hover:bg-rose-50 transition-all" title="Изтрий резултат">
-                    <i data-lucide="trash-2" class="w-4 h-4"></i>
-                </button>
+                <div class="flex items-center justify-center gap-1">
+                    ${r._kind === 'live'
+                        ? `<button onclick="window.downloadLiveReport('${r.id}')" class="text-indigo-500 hover:text-indigo-700 p-2 rounded-lg hover:bg-indigo-50 transition-all" title="Изтегли live рапорт"><i data-lucide="download" class="w-4 h-4"></i></button>
+                           <button onclick="window.deleteLiveReport('${r.id}')" class="text-rose-400 hover:text-rose-600 p-2 rounded-lg hover:bg-rose-50 transition-all" title="Изтрий live рапорт"><i data-lucide="trash-2" class="w-4 h-4"></i></button>`
+                        : `<button onclick="window.downloadSoloResult('${r.id}')" class="text-indigo-500 hover:text-indigo-700 p-2 rounded-lg hover:bg-indigo-50 transition-all" title="Изтегли резултат"><i data-lucide="download" class="w-4 h-4"></i></button>
+                           <button onclick="window.deleteSoloResult('${r.id}')" class="text-rose-400 hover:text-rose-600 p-2 rounded-lg hover:bg-rose-50 transition-all" title="Изтрий резултат"><i data-lucide="trash-2" class="w-4 h-4"></i></button>`}
+                </div>
             </td>
         </tr>
-    `).join('') || '<tr><td colspan="5" class="py-6 text-center text-slate-300 italic">Няма данни</td></tr>';
+    `).join('') || '<tr><td colspan="6" class="py-6 text-center text-slate-300 italic">Няма данни</td></tr>';
     if (window.lucide) lucide.createIcons();
 }
 
@@ -882,6 +964,29 @@ window.finishLiveSession = async () => {
     if (!sessionID) return;
     try {
         await updateDoc(getSessionRefById(sessionDocId), { status: 'finished' });
+        if (user) {
+            const analytics = getClassQuestionStats();
+            const highlights = getLiveSessionTeacherHighlights();
+            const liveReportPayload = {
+                sessionId: sessionID,
+                quizTitle: currentQuiz?.title || 'Без име',
+                participantsCount: analytics.summary?.participantsCount ?? lastFetchedParticipants.length,
+                scoreLabel: `${analytics.summary?.totalCorrect ?? 0}/${analytics.summary?.totalAnswered ?? 0}`,
+                analyticsSummary: analytics.summary || null,
+                highlights,
+                participants: lastFetchedParticipants.map((p) => ({
+                    id: p.id || '',
+                    name: p.name || 'Участник',
+                    avatar: p.avatar || '👤',
+                    score: p.score || 0,
+                    answers: p.answers || {},
+                    reactionMs: p.reactionMs || {}
+                })),
+                timestampMs: Date.now(),
+                createdAt: serverTimestamp()
+            };
+            await addDoc(getTeacherLiveReportsCollection(user.uid), liveReportPayload);
+        }
         document.getElementById('export-buttons-container').classList.remove('hidden');
         document.getElementById('export-buttons-container').classList.add('flex');
         window.showMessage("Сесията приключи!");
