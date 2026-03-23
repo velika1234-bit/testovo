@@ -73,12 +73,13 @@ export const shuffleArray = (arr) => {
 };
 // --- Генериране на QR код (връща data URL) ---
 export const generateQRCode = (text, size = 200) => {
-    if (typeof qrcode === 'undefined') {
+    const qrLib = globalThis?.qrcode;
+    if (typeof qrLib !== 'function') {
         console.error('QR код библиотеката не е заредена!');
         return null;
     }
     try {
-        const qr = qrcode(0, 'H');
+        const qr = qrLib(0, 'H');
         qr.addData(text);
         qr.make();
         const canvas = document.createElement('canvas');

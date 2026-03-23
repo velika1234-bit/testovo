@@ -675,6 +675,8 @@ const getResultsFilterElement = () =>
     document.getElementById('resultsFilter') ||
     document.getElementById('filterSelect');
 
+const sortRecordsByTimestampDesc = (records) => [...records].sort((a, b) => b._sortTs - a._sortTs);
+
 function renderMyQuizzes() {
     const container = document.getElementById('my-quizzes-list');
     if (!container) return;
@@ -708,7 +710,7 @@ function renderSoloResults() {
     const filtered = resultsFilter === 'all'
         ? combinedRecords
         : combinedRecords.filter((r) => r._kind === resultsFilter);
-    const sortedResults = [...filtered].sort((a, b) => b._sortTs - a._sortTs);
+    const sortedResults = sortRecordsByTimestampDesc(filtered);
     const summaryEl = document.getElementById('solo-results-summary');
     if (summaryEl) {
         const soloOnly = sortedResults.filter((r) => r._kind === 'solo');
@@ -785,7 +787,8 @@ const renderHostSessionQRCode = (pin) => {
     const joinUrl = `${window.location.origin}${window.location.pathname}?join=${encodeURIComponent(pin)}`;
     const qrDataUrl = generateQRCode(joinUrl, 180);
     if (!qrDataUrl) {
-        qrContainer.classList.add('hidden');
+        qrCodeEl.innerHTML = `<a href="${joinUrl}" target="_blank" rel="noopener" class="text-[11px] font-black text-indigo-600 underline break-all">Вход линк: ${joinUrl}</a>`;
+        qrContainer.classList.remove('hidden');
         return;
     }
 
