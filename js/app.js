@@ -1,7 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, serverTimestamp, updateDoc, deleteDoc, addDoc, query, where, limit, getDocs, collectionGroup } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getAuth, signInAnonymously, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
+import { getFunctions } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 // --- Импортиране на helper функции от utils.js ---
 import { formatTime, formatDate, parseScoreValue, decodeQuizCode, AVATARS, getTimestampMs, generateQRCode } from './utils.js';
 
@@ -26,7 +26,7 @@ const legacyAppId = 'videoquiz-ultimate';
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
-const functions = getFunctions(app, 'us-central1');
+getFunctions(app, 'us-central1');
 // --- GLOBAL STATE ---
 let user = null;
 let lastAuthUid = null;
@@ -60,6 +60,7 @@ let rulesModalShown = false;
 let sopModeEnabled = false;
 let isDiscussionMode = false;
 let hostLeaderboardExpanded = false;
+let currentAccessLevel = 'full';
 const RISK_THRESHOLDS = {
     minEngagementPct: 60,
     minAccuracyPct: 50,
@@ -194,6 +195,7 @@ if (adminBtn) {
             const profileSnap = await getDoc(profileRef);
             if (profileSnap.exists() && profileSnap.data().role === 'teacher') {
                 isTeacher = true;
+                currentAccessLevel = profileSnap.data().accessLevel || 'full';
                 window.loadMyQuizzes();
                 window.loadSoloResults();
                 window.loadLiveReports();
@@ -411,6 +413,7 @@ window.handleAuthSubmit = async () => {
                     role: 'teacher',
                     email: email,
                     emailNormalized: email.toLowerCase(),
+                    accessLevel: 'trial',
                     activatedAt: serverTimestamp()
                 });
                 window.showMessage("Успешна регистрация!");
@@ -427,6 +430,7 @@ window.handleAuthSubmit = async () => {
                         role: 'teacher',
                         email: email + " (Guest)",
                         emailNormalized: email.toLowerCase(),
+                        accessLevel: 'trial',
                         activatedAt: serverTimestamp(),
                         isFallback: true
                     });
@@ -987,6 +991,10 @@ function renderHostDashboard() {
 
     const maxCompactRows = 10;
     const visibleLeaderboard = hostLeaderboardExpanded ? leaderboard : leaderboard.slice(0, maxCompactRows);
+    const renderRiskSignalsLine = (participant) => {
+        if (!hostLeaderboardExpanded || participant.riskSignals.length === 0) return '';
+        return `<div class="mt-1 text-[10px] text-amber-600 font-bold">Рискови сигнали: ${participant.riskSignals.join(', ')}</div>`;
+    };
 
     const rowsHtml = visibleLeaderboard
         .map((p, idx) => `
@@ -999,7 +1007,7 @@ function renderHostDashboard() {
                     ${p.riskSignals.length > 0 ? `<span class="text-[9px] font-black uppercase bg-amber-100 text-amber-700 px-2 py-1 rounded-lg">⚠ Риск</span>` : ''}
                 </div>
                 <div class="mt-1 text-[10px] text-slate-400 font-bold">Отг.: ${p.givenAnswers}/${quizQuestions.length || 0} · Точност: ${p.accuracy}%${p.bestReactionMs !== null ? ` · ⚡ ${(p.bestReactionMs / 1000).toFixed(2)}s` : ''}</div>
-                ${hostLeaderboardExpanded && p.riskSignals.length > 0 ? `<div class="mt-1 text-[10px] text-amber-600 font-bold">Рискови сигнали: ${p.riskSignals.join(', ')}</div>` : ''}
+                ${renderRiskSignalsLine(p)}
             </td>
             <td class="py-3 px-3 text-right"><span class="bg-indigo-100 text-indigo-600 px-3 py-1 rounded-xl font-black text-xs sm:text-sm">${p.score} / ${totalMax || 0}</span></td>
             <td class="py-3 px-2 text-center">
@@ -2539,6 +2547,9 @@ window.deleteEditorQuestion = (i) => { if (confirm("Изтриване на въ
 
 window.saveQuizToLibrary = async () => {
     if (!user) return;
+    if (!editingQuizId && currentAccessLevel === 'trial' && myQuizzes.length >= 5) {
+        return window.showMessage("Триал планът позволява до 5 урока. Свържете се с администратор за пълен достъп.", "error");
+    }
     let title = "";
     const existing = editingQuizId ? myQuizzes.find(x => x.id === editingQuizId) : null;
     title = prompt("Име на урока:", existing?.title || "");
@@ -2617,22 +2628,53 @@ window.requestStorageAccess = async function() {
 // --- АДМИНИСТРАТОРСКИ ПАНЕЛ (само за admin) ---
 window.openAdminPanel = async function() {
   try {
-    window.showMessage("📊 Зареждам статистики...", "info");
-    
-    const getAdminStatsFunc = httpsCallable(functions, 'getAdminStats');
-    const result = await getAdminStatsFunc();
-    const stats = result.data;
-    
-    const message = `📊 АДМИН СТАТИСТИКИ:
-━━━━━━━━━━━━━━━━━━━━━
-👥 Учители: ${stats.totalTeachers}
-📚 Уроци: ${stats.totalQuizzes}
-📝 Соло резултати: ${stats.totalSoloResults}
-🎬 Сесии на живо: ${stats.totalSessions}
-👩‍🎓 Участници (общо): ${stats.totalParticipants}
-━━━━━━━━━━━━━━━━━━━━━`;
-    
-    window.showMessage(message, "info", 15000); // показва се 15 секунди
+    window.showMessage("📊 Зареждам админ панела...", "info");
+
+    const teachersSnap = await getDocs(query(collectionGroup(db, 'profile'), where('role', '==', 'teacher')));
+    const teachers = teachersSnap.docs.map((d) => {
+      const profile = d.data() || {};
+      return {
+        uid: d.ref.parent.parent?.id || '',
+        email: profile.email || 'няма имейл',
+        accessLevel: profile.accessLevel || 'full',
+        ref: d.ref
+      };
+    }).sort((a, b) => a.email.localeCompare(b.email));
+
+    const action = prompt(
+      `АДМИН ПАНЕЛ\n1) Статистика\n2) Промяна на достъп\n\nУчители: ${teachers.length}\nВъведете 1 или 2:`
+    );
+
+    if (action === '1') {
+      const byLevel = teachers.reduce((acc, t) => {
+        acc[t.accessLevel] = (acc[t.accessLevel] || 0) + 1;
+        return acc;
+      }, {});
+      const statsText = `👥 Учители: ${teachers.length}\n🧪 Trial: ${byLevel.trial || 0}\n✅ Full: ${byLevel.full || 0}\n🛡️ Admin: ${byLevel.admin || 0}`;
+      return window.showMessage(statsText, "info");
+    }
+
+    if (action === '2') {
+      const listText = teachers
+        .map((t, i) => `${i + 1}) ${t.email} [${t.accessLevel}]`)
+        .join('\n');
+      const idxRaw = prompt(`Изберете учител:\n${listText}`);
+      const idx = Number(idxRaw) - 1;
+      if (!Number.isInteger(idx) || idx < 0 || idx >= teachers.length) {
+        return window.showMessage("Невалиден избор.", "error");
+      }
+
+      const newLevel = (prompt("Нов достъп (trial/full/admin):", teachers[idx].accessLevel) || '').trim().toLowerCase();
+      if (!['trial', 'full', 'admin'].includes(newLevel)) {
+        return window.showMessage("Невалидно ниво на достъп.", "error");
+      }
+
+      await updateDoc(teachers[idx].ref, { accessLevel: newLevel, accessUpdatedAt: serverTimestamp() });
+      window.showMessage(`Достъпът е обновен: ${teachers[idx].email} → ${newLevel}`, "info");
+      return;
+    }
+
+    window.showMessage("Операцията е отменена.", "info");
   } catch (error) {
     console.error("Admin panel error:", error);
     window.showMessage("❌ Грешка: " + (error.message || "Нямате права"), "error");
