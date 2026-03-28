@@ -27,6 +27,8 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
 getFunctions(app, 'us-central1');
+const APP_BUILD_TAG = '2026-03-28-admin-access-v2';
+console.info('[VideoQuiz] Build:', APP_BUILD_TAG);
 // --- GLOBAL STATE ---
 let user = null;
 let lastAuthUid = null;
@@ -60,6 +62,7 @@ let rulesModalShown = false;
 let sopModeEnabled = false;
 let isDiscussionMode = false;
 let hostLeaderboardExpanded = false;
+// Merge-note: keep this state var; used for trial/full/admin gating and admin updates.
 let currentAccessLevel = 'full';
 const RISK_THRESHOLDS = {
     minEngagementPct: 60,
