@@ -2726,7 +2726,7 @@ window.openAdminPanel = async function() {
   } catch (error) {
     console.error("Admin panel error:", error);
     if (error?.code === 'permission-denied' || String(error?.message || '').includes('Missing or insufficient permissions')) {
-      window.showMessage(`❌ Липсват Firestore права за admin panel. Деплойнете rules за проекта "${firebaseConfig.projectId}" с: firebase use ${firebaseConfig.projectId} && firebase deploy --only firestore:rules`, "error");
+      window.showMessage(`❌ Липсват Firestore права за admin panel. Нужна е корекция на Security Rules. За проекта "${firebaseConfig.projectId}" изпълнете: firebase use ${firebaseConfig.projectId} && firebase deploy --only firestore:rules`, "error");
       return;
     }
     window.showMessage("❌ Грешка: " + (error.message || "Нямате права"), "error");
