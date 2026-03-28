@@ -637,8 +637,8 @@ window.deleteLiveReport = async (id) => {
     }
 };
 
-const downloadJsonFile = (fileName, payload) => {
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+const downloadTextFile = (fileName, textContent) => {
+    const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -649,26 +649,66 @@ const downloadJsonFile = (fileName, payload) => {
     URL.revokeObjectURL(url);
 };
 
+const formatSoloResultAsTeacherReport = (item) => {
+    const now = formatDate(Date.now());
+    const resultDate = item?.timestamp ? formatDate(item.timestamp) : '-';
+    const scoreText = item?.score || '-';
+    return [
+        'РАПОРТ: ИНДИВИДУАЛЕН РЕЗУЛТАТ',
+        '================================',
+        `Ученик: ${item?.studentName || '-'}`,
+        `Урок: ${item?.quizTitle || '-'}`,
+        `Резултат: ${scoreText}`,
+        `Дата на опит: ${resultDate}`,
+        '--------------------------------',
+        `Експортирано: ${now}`
+    ].join('\n');
+};
+
+const formatLiveReportAsTeacherReport = (item) => {
+    const summary = item?.analyticsSummary || {};
+    const participants = Array.isArray(item?.participants) ? item.participants : [];
+    const dateText = item?.timestampMs ? formatDate(item.timestampMs) : '-';
+    const avgReaction = Number.isFinite(summary?.avgReactionMs)
+        ? `${Math.round(summary.avgReactionMs / 10) / 100} сек`
+        : '-';
+    const topParticipants = [...participants]
+        .sort((a, b) => (b?.score || 0) - (a?.score || 0))
+        .slice(0, 10)
+        .map((p, idx) => {
+            const answerCount = Object.keys(p?.answers || {}).length;
+            return `${idx + 1}. ${p?.name || 'Участник'} — ${p?.score || 0} т. (${answerCount} отговора)`;
+        });
+
+    return [
+        'РАПОРТ: LIVE СЕСИЯ',
+        '================================',
+        `Сесия: ${item?.sessionId || '-'}`,
+        `Урок: ${item?.quizTitle || '-'}`,
+        `Дата: ${dateText}`,
+        `Участници: ${item?.participantsCount || 0}`,
+        `Резултат (клас): ${item?.scoreLabel || '-'}`,
+        `Средна реакция: ${avgReaction}`,
+        '--------------------------------',
+        'ТОП УЧАСТНИЦИ (до 10):',
+        ...(topParticipants.length ? topParticipants : ['- Няма данни за участници']),
+        '--------------------------------',
+        `Експортирано: ${formatDate(Date.now())}`
+    ].join('\n');
+};
+
 window.downloadSoloResult = (id) => {
     const item = soloResults.find((r) => r.id === id);
     if (!item) return window.showMessage("Записът не е намерен.", "error");
-    const payload = {
-        type: 'solo',
-        studentName: item.studentName || '-',
-        quizTitle: item.quizTitle || '-',
-        score: item.score || '-',
-        timestamp: item.timestamp || null,
-        exportedAt: new Date().toISOString()
-    };
     const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
-    downloadJsonFile(`solo_result_${item.id}_${stamp}.json`, payload);
+    downloadTextFile(`solo_result_${item.id}_${stamp}.txt`, formatSoloResultAsTeacherReport(item));
 };
 
 window.downloadLiveReport = (id) => {
     const item = liveReports.find((r) => r.id === id);
     if (!item) return window.showMessage("Рапортът не е намерен.", "error");
     const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
-    downloadJsonFile(`live_report_${item.sessionId || item.id}_${stamp}.json`, item);
+    downloadTextFile(`live_report_${item.sessionId || item.id}_${stamp}.txt`, formatLiveReportAsTeacherReport(item));
 };
 
 window.setResultsFilter = (filterValue) => {
@@ -750,9 +790,9 @@ function renderSoloResults() {
             <td class="py-3 px-4 text-center">
                 <div class="flex items-center justify-center gap-1">
                     ${r._kind === 'live'
-                        ? `<button onclick="window.downloadLiveReport('${r.id}')" class="text-indigo-500 hover:text-indigo-700 p-2 rounded-lg hover:bg-indigo-50 transition-all" title="Изтегли live рапорт"><i data-lucide="download" class="w-4 h-4"></i></button>
+                        ? `<button onclick="window.downloadLiveReport('${r.id}')" class="text-indigo-500 hover:text-indigo-700 p-2 rounded-lg hover:bg-indigo-50 transition-all" title="Изтегли live рапорт (TXT)"><i data-lucide="download" class="w-4 h-4"></i></button>
                            <button onclick="window.deleteLiveReport('${r.id}')" class="text-rose-400 hover:text-rose-600 p-2 rounded-lg hover:bg-rose-50 transition-all" title="Изтрий live рапорт"><i data-lucide="trash-2" class="w-4 h-4"></i></button>`
-                        : `<button onclick="window.downloadSoloResult('${r.id}')" class="text-indigo-500 hover:text-indigo-700 p-2 rounded-lg hover:bg-indigo-50 transition-all" title="Изтегли резултат"><i data-lucide="download" class="w-4 h-4"></i></button>
+                        : `<button onclick="window.downloadSoloResult('${r.id}')" class="text-indigo-500 hover:text-indigo-700 p-2 rounded-lg hover:bg-indigo-50 transition-all" title="Изтегли резултат (TXT)"><i data-lucide="download" class="w-4 h-4"></i></button>
                            <button onclick="window.deleteSoloResult('${r.id}')" class="text-rose-400 hover:text-rose-600 p-2 rounded-lg hover:bg-rose-50 transition-all" title="Изтрий резултат"><i data-lucide="trash-2" class="w-4 h-4"></i></button>`}
                 </div>
             </td>
