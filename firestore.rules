@@ -14,6 +14,7 @@ service cloud.firestore {
     }
 
     function isAdmin() {
+      // Keep bootstrap UID fallback + accessLevel check together during merges.
       return signedIn() && (
         request.auth.uid == 'uNdGTBsgatZX4uOPTZqKG9qLJVZ2' ||
         get(profileDoc(request.auth.uid)).data.accessLevel == 'admin'

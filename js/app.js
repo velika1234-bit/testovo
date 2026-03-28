@@ -36,6 +36,7 @@ let isTeacher = false;
 let editingQuizId = null;
 let editingQuestionIndex = null;
 const MASTER_TEACHER_CODE = "vilidaf76";
+const ADMIN_UID = 'uNdGTBsgatZX4uOPTZqKG9qLJVZ2';
 
 let player, solvePlayer, hostPlayer;
 let questions = [], currentQuiz = null, studentNameValue = "";
@@ -172,15 +173,14 @@ onAuthStateChanged(auth, async (u) => {
         if (document.getElementById('my-quizzes-list')) renderMyQuizzes();
         if (document.getElementById('solo-results-body')) renderSoloResults();
         // --- ПОКАЗВАНЕ НА АДМИН БУТОН (само за администратор) ---
-const ADMIN_UID = 'uNdGTBsgatZX4uOPTZqKG9qLJVZ2';
-const adminBtn = document.getElementById('admin-panel-btn');
-if (adminBtn) {
-  if (incomingUid === ADMIN_UID) {
-    adminBtn.classList.remove('hidden');
-  } else {
-    adminBtn.classList.add('hidden');
-  }
-}
+        const adminBtn = document.getElementById('admin-panel-btn');
+        if (adminBtn) {
+            if (incomingUid === ADMIN_UID) {
+                adminBtn.classList.remove('hidden');
+            } else {
+                adminBtn.classList.add('hidden');
+            }
+        }
     }
     lastAuthUid = incomingUid;
     user = u;
@@ -2634,7 +2634,7 @@ window.openAdminPanel = async function() {
     const myProfileRef = doc(db, 'artifacts', finalAppId, 'users', user.uid, 'settings', 'profile');
     const myProfileSnap = await getDoc(myProfileRef);
     const myAccessLevel = myProfileSnap.exists() ? (myProfileSnap.data().accessLevel || 'full') : 'full';
-    if (myAccessLevel !== 'admin') {
+    if (myAccessLevel !== 'admin' && user.uid !== ADMIN_UID) {
       return window.showMessage("Нямате администраторски достъп.", "error");
     }
 
