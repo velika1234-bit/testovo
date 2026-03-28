@@ -62,8 +62,7 @@ let rulesModalShown = false;
 let sopModeEnabled = false;
 let isDiscussionMode = false;
 let hostLeaderboardExpanded = false;
-// Merge-note: keep this state var; used for trial/full/admin gating and admin updates.
-let currentAccessLevel = 'full';
+let currentAccessLevel = 'full'; // trial/full/admin gating + admin updates
 const RISK_THRESHOLDS = {
     minEngagementPct: 60,
     minAccuracyPct: 50,
@@ -2632,6 +2631,12 @@ window.requestStorageAccess = async function() {
 window.openAdminPanel = async function() {
   try {
     window.showMessage("📊 Зареждам админ панела...", "info");
+    const myProfileRef = doc(db, 'artifacts', finalAppId, 'users', user.uid, 'settings', 'profile');
+    const myProfileSnap = await getDoc(myProfileRef);
+    const myAccessLevel = myProfileSnap.exists() ? (myProfileSnap.data().accessLevel || 'full') : 'full';
+    if (myAccessLevel !== 'admin') {
+      return window.showMessage("Нямате администраторски достъп.", "error");
+    }
 
     const teachersSnap = await getDocs(query(collectionGroup(db, 'profile'), where('role', '==', 'teacher')));
     const teachers = teachersSnap.docs.map((d) => {
@@ -2680,6 +2685,10 @@ window.openAdminPanel = async function() {
     window.showMessage("Операцията е отменена.", "info");
   } catch (error) {
     console.error("Admin panel error:", error);
+    if (error?.code === 'permission-denied' || String(error?.message || '').includes('Missing or insufficient permissions')) {
+      window.showMessage("❌ Липсват Firestore права за admin panel. Нужна е корекция на Security Rules за четене/писане на users/*/settings/profile от admin.", "error");
+      return;
+    }
     window.showMessage("❌ Грешка: " + (error.message || "Нямате права"), "error");
   }
 };
