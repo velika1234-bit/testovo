@@ -1,9 +1,9 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, serverTimestamp, updateDoc, deleteDoc, addDoc, query, where, limit, getDocs, collectionGroup } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getAuth, signInAnonymously, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
+import { getFunctions } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 // --- Импортиране на helper функции от utils.js ---
-import { formatTime, formatDate, parseScoreValue, decodeQuizCode, AVATARS, getTimestampMs } from './utils.js';
+import { formatTime, formatDate, parseScoreValue, decodeQuizCode, AVATARS, getTimestampMs, generateQRCode } from './utils.js';
 
 // Backward-compatible globals (за стари извиквания window.formatDate/window.formatTime)
 window.formatDate = formatDate;
@@ -26,7 +26,9 @@ const legacyAppId = 'videoquiz-ultimate';
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
-const functions = getFunctions(app, 'us-central1');
+getFunctions(app, 'us-central1');
+const APP_BUILD_TAG = '2026-03-28-admin-access-v2';
+console.info('[VideoQuiz] Build:', APP_BUILD_TAG);
 // --- GLOBAL STATE ---
 let user = null;
 let lastAuthUid = null;
@@ -34,6 +36,7 @@ let isTeacher = false;
 let editingQuizId = null;
 let editingQuestionIndex = null;
 const MASTER_TEACHER_CODE = "vilidaf76";
+const ADMIN_UID = 'uNdGTBsgatZX4uOPTZqKG9qLJVZ2';
 
 let player, solvePlayer, hostPlayer;
 let questions = [], currentQuiz = null, studentNameValue = "";
@@ -47,6 +50,8 @@ let liveScore = 0;
 let scoreCount = 0, currentQIndex = -1;
 let lastFetchedParticipants = [];
 let soloResults = [];
+let liveReports = [];
+let resultsFilter = 'all';
 let myQuizzes = [];
 let isYTReady = false;
 let authMode = 'login';
@@ -57,9 +62,17 @@ let participantStorageMode = 'legacy';
 let rulesModalShown = false;
 let sopModeEnabled = false;
 let isDiscussionMode = false;
+let hostLeaderboardExpanded = false;
+let currentAccessLevel = 'full'; // trial/full/admin gating + admin updates
+const RISK_THRESHOLDS = {
+    minEngagementPct: 60,
+    minAccuracyPct: 50,
+    minScorePct: 40
+};
 
 // Helper functions for Firestore paths
 const getTeacherSoloResultsCollection = (teacherId) => collection(db, 'artifacts', finalAppId, 'users', teacherId, 'solo_results');
+const getTeacherLiveReportsCollection = (teacherId) => collection(db, 'artifacts', finalAppId, 'users', teacherId, 'live_reports');
 const getTeacherQuizzesCollection = (teacherId, appId = finalAppId) => collection(db, 'artifacts', appId, 'users', teacherId, 'my_quizzes');
 const getSessionRefById = (id) => doc(db, 'artifacts', finalAppId, 'public', 'data', 'sessions', id);
 const getParticipantsCollection = (id) => collection(db, 'artifacts', finalAppId, 'public', 'data', 'sessions', id, 'participants');
@@ -156,18 +169,18 @@ onAuthStateChanged(auth, async (u) => {
     if (lastAuthUid !== incomingUid) {
         myQuizzes = [];
         soloResults = [];
+        liveReports = [];
         if (document.getElementById('my-quizzes-list')) renderMyQuizzes();
         if (document.getElementById('solo-results-body')) renderSoloResults();
         // --- ПОКАЗВАНЕ НА АДМИН БУТОН (само за администратор) ---
-const ADMIN_UID = 'uNdGTBsgatZX4uOPTZqKG9qLJVZ2';
-const adminBtn = document.getElementById('admin-panel-btn');
-if (adminBtn) {
-  if (incomingUid === ADMIN_UID) {
-    adminBtn.classList.remove('hidden');
-  } else {
-    adminBtn.classList.add('hidden');
-  }
-}
+        const adminBtn = document.getElementById('admin-panel-btn');
+        if (adminBtn) {
+            if (incomingUid === ADMIN_UID) {
+                adminBtn.classList.remove('hidden');
+            } else {
+                adminBtn.classList.add('hidden');
+            }
+        }
     }
     lastAuthUid = incomingUid;
     user = u;
@@ -184,8 +197,10 @@ if (adminBtn) {
             const profileSnap = await getDoc(profileRef);
             if (profileSnap.exists() && profileSnap.data().role === 'teacher') {
                 isTeacher = true;
+                currentAccessLevel = profileSnap.data().accessLevel || 'full';
                 window.loadMyQuizzes();
                 window.loadSoloResults();
+                window.loadLiveReports();
                 if (!document.getElementById('screen-welcome').classList.contains('hidden')) {
                     window.switchScreen('teacher-dashboard');
                 }
@@ -317,6 +332,7 @@ window.switchScreen = (name) => {
     if (name === 'teacher-dashboard' && user) {
         window.loadMyQuizzes();
         window.loadSoloResults();
+        window.loadLiveReports();
     }
     if (window.lucide) lucide.createIcons();
     window.scrollTo(0, 0);
@@ -338,6 +354,10 @@ window.showMessage = (text, type = 'info') => {
 
 window.quitHostSession = () => {
     if (confirm("Това ще прекъсне сесията и ще спре таймерите. Сигурни ли сте?")) {
+        const qrContainer = document.getElementById('qr-container');
+        const qrCodeEl = document.getElementById('qr-code');
+        if (qrCodeEl) qrCodeEl.innerHTML = '';
+        qrContainer?.classList.add('hidden');
         window.switchScreen('teacher-dashboard');
     }
 };
@@ -395,6 +415,7 @@ window.handleAuthSubmit = async () => {
                     role: 'teacher',
                     email: email,
                     emailNormalized: email.toLowerCase(),
+                    accessLevel: 'trial',
                     activatedAt: serverTimestamp()
                 });
                 window.showMessage("Успешна регистрация!");
@@ -411,6 +432,7 @@ window.handleAuthSubmit = async () => {
                         role: 'teacher',
                         email: email + " (Guest)",
                         emailNormalized: email.toLowerCase(),
+                        accessLevel: 'trial',
                         activatedAt: serverTimestamp(),
                         isFallback: true
                     });
@@ -571,6 +593,23 @@ window.loadSoloResults = async () => {
     unsubscribes.push(unsub);
 };
 
+window.loadLiveReports = async () => {
+    if (!user) return;
+    liveReports = [];
+    renderSoloResults();
+    const q = getTeacherLiveReportsCollection(user.uid);
+    const unsub = onSnapshot(q, (snap) => {
+        liveReports = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+        renderSoloResults();
+    }, (error) => {
+        console.error("Live reports error:", error);
+        if (error.code === 'permission-denied') window.showRulesHelpModal();
+        liveReports = [];
+        renderSoloResults();
+    });
+    unsubscribes.push(unsub);
+};
+
 window.deleteSoloResult = async (id) => {
     if (!user) return;
     if (confirm("Сигурни ли сте, че искате да изтриете този запис?")) {
@@ -584,6 +623,130 @@ window.deleteSoloResult = async (id) => {
         }
     }
 };
+
+window.deleteLiveReport = async (id) => {
+    if (!user) return;
+    if (!confirm("Сигурни ли сте, че искате да изтриете live рапорта?")) return;
+    try {
+        await deleteDoc(doc(getTeacherLiveReportsCollection(user.uid), id));
+        window.showMessage("Live рапортът е изтрит.", "info");
+    } catch (e) {
+        console.error(e);
+        if (e.code === 'permission-denied') window.showRulesHelpModal();
+        else window.showMessage("Грешка при изтриване.", "error");
+    }
+};
+
+const withPdfDoc = (onReady) => {
+    const JsPdfCtor = window.jspdf?.jsPDF || window.jsPDF;
+    if (!JsPdfCtor) {
+        window.showMessage("PDF библиотеката не е заредена. Моля, опитайте отново.", "error");
+        return null;
+    }
+    const doc = new JsPdfCtor({ unit: 'pt', format: 'a4' });
+    doc.setFont('helvetica');
+    onReady(doc);
+    return doc;
+};
+
+const saveSoloResultPdf = (item, stamp) => {
+    const doc = withPdfDoc((pdf) => {
+        const dateText = item?.timestamp ? formatDate(item.timestamp) : '-';
+        let y = 50;
+        pdf.setFontSize(16);
+        pdf.text('VideoQuiz - Индивидуален рапорт', 40, y);
+        y += 24;
+        pdf.setFontSize(11);
+        [
+            `Ученик: ${item?.studentName || '-'}`,
+            `Урок: ${item?.quizTitle || '-'}`,
+            `Резултат: ${item?.score || '-'}`,
+            `Дата на опит: ${dateText}`,
+            `Експортирано: ${formatDate(Date.now())}`
+        ].forEach((line) => {
+            pdf.text(line, 40, y);
+            y += 18;
+        });
+    });
+    if (!doc) return;
+    doc.save(`solo_result_${item.id}_${stamp}.pdf`);
+};
+
+const saveLiveReportPdf = (item, stamp) => {
+    const summary = item?.analyticsSummary || {};
+    const participants = Array.isArray(item?.participants) ? item.participants : [];
+    const sortedParticipants = [...participants].sort((a, b) => (b?.score || 0) - (a?.score || 0));
+    const doc = withPdfDoc((pdf) => {
+        pdf.setFontSize(16);
+        pdf.text(`VideoQuiz - Live рапорт (${item?.sessionId || '-'})`, 40, 50);
+        pdf.setFontSize(10);
+        const topInfo = [
+            `Урок: ${item?.quizTitle || '-'}`,
+            `Дата: ${item?.timestampMs ? formatDate(item.timestampMs) : '-'}`,
+            `Участници: ${item?.participantsCount || 0}`,
+            `Резултат клас: ${item?.scoreLabel || '-'}`,
+            `Покритие: ${summary?.answerCoveragePct ?? 0}%`,
+            `Верни отговори (клас): ${summary?.classCorrectPct ?? 0}%`
+        ];
+        let y = 72;
+        topInfo.forEach((line) => {
+            pdf.text(line, 40, y);
+            y += 14;
+        });
+
+        const tableRows = sortedParticipants.map((p, idx) => {
+            const answersCount = Object.values(p?.answers || {}).filter((v) => v === true || v === false).length;
+            const correctCount = Object.values(p?.answers || {}).filter((v) => v === true).length;
+            const accuracy = answersCount > 0 ? Math.round((correctCount / answersCount) * 100) : 0;
+            return [idx + 1, p?.name || 'Участник', p?.score || 0, `${correctCount}/${answersCount}`, `${accuracy}%`];
+        });
+        if (typeof pdf.autoTable === 'function') {
+            pdf.autoTable({
+                startY: y + 8,
+                head: [['#', 'Участник', 'Точки', 'Верни/Отговорени', 'Точност']],
+                body: tableRows.length ? tableRows : [['-', 'Няма данни', '-', '-', '-']],
+                styles: { fontSize: 9 }
+            });
+        } else {
+            pdf.setFontSize(10);
+            pdf.text('Участници:', 40, y + 14);
+            tableRows.slice(0, 18).forEach((row, index) => {
+                pdf.text(`${row[0]}. ${row[1]} - ${row[2]}т., ${row[3]}, ${row[4]}`, 40, y + 32 + (index * 13));
+            });
+        }
+    });
+    if (!doc) return;
+    doc.save(`live_report_${item.sessionId || item.id}_${stamp}.pdf`);
+};
+
+window.downloadSoloResult = (id) => {
+    const item = soloResults.find((r) => r.id === id);
+    if (!item) return window.showMessage("Записът не е намерен.", "error");
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
+    saveSoloResultPdf(item, stamp);
+};
+
+window.downloadLiveReport = (id) => {
+    const item = liveReports.find((r) => r.id === id);
+    if (!item) return window.showMessage("Рапортът не е намерен.", "error");
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
+    saveLiveReportPdf(item, stamp);
+};
+
+window.setResultsFilter = (filterValue) => {
+    if (!['all', 'solo', 'live'].includes(filterValue)) return;
+    resultsFilter = filterValue;
+    renderSoloResults();
+};
+
+const getResultsFilterElement = () =>
+    document.getElementById('results-filter') ||
+    document.getElementById('resultsFilter') ||
+    document.getElementById('filterSelect');
+
+// Merge-note: keep this helper + single usage in renderSoloResults().
+// It avoids duplicate inline sort lines in conflict editors and keeps sorting non-mutating.
+const sortRecordsByTimestampDesc = (records) => [...records].sort((a, b) => b._sortTs - a._sortTs);
 
 function renderMyQuizzes() {
     const container = document.getElementById('my-quizzes-list');
@@ -608,36 +771,55 @@ function renderMyQuizzes() {
 function renderSoloResults() {
     const body = document.getElementById('solo-results-body');
     if (!body) return;
+    const filterSelect = getResultsFilterElement();
+    if (filterSelect) filterSelect.value = resultsFilter;
 
-    const sortedResults = [...soloResults].sort((a, b) => getTimestampMs(b.timestamp) - getTimestampMs(a.timestamp));
+    const combinedRecords = [
+        ...soloResults.map((r) => ({ ...r, _kind: 'solo', _sortTs: getTimestampMs(r.timestamp) })),
+        ...liveReports.map((r) => ({ ...r, _kind: 'live', _sortTs: Number(r.timestampMs || 0) }))
+    ];
+    const filtered = resultsFilter === 'all'
+        ? combinedRecords
+        : combinedRecords.filter((r) => r._kind === resultsFilter);
+    const sortedResults = sortRecordsByTimestampDesc(filtered);
     const summaryEl = document.getElementById('solo-results-summary');
     if (summaryEl) {
-        const totalAttempts = sortedResults.length;
-        const totals = sortedResults.reduce((acc, r) => {
+        const soloOnly = sortedResults.filter((r) => r._kind === 'solo');
+        const liveOnly = sortedResults.filter((r) => r._kind === 'live');
+        const totals = soloOnly.reduce((acc, r) => {
             const parsed = parseScoreValue(r.score);
             acc.score += parsed.score;
             acc.total += parsed.total;
             return acc;
         }, { score: 0, total: 0 });
         const pct = totals.total > 0 ? Math.round((totals.score / totals.total) * 100) : 0;
-        summaryEl.innerText = totalAttempts > 0
-            ? `Опити: ${totalAttempts} • Среден успех: ${pct}% (${totals.score}/${totals.total})`
+        summaryEl.innerText = sortedResults.length > 0
+            ? `Индивидуални: ${soloOnly.length} • Live рапорти: ${liveOnly.length} • Среден успех (solo): ${pct}%`
             : 'Все още няма резултати за този профил.';
     }
 
     body.innerHTML = sortedResults.map(r => `
         <tr class="border-b text-[10px] sm:text-xs hover:bg-slate-50">
-            <td class="py-3 px-4 font-black text-slate-700">${r.studentName}</td>
-            <td class="py-3 px-4 text-slate-500 truncate max-w-[120px]">${r.quizTitle}</td>
-            <td class="py-3 px-4 text-slate-400 font-mono">${formatDate(r.timestamp)}</td>
-            <td class="py-3 px-4 text-right"><span class="bg-indigo-100 text-indigo-600 px-2 py-1 rounded-lg font-black">${r.score}</span></td>
+            <td class="py-3 px-4">
+                ${r._kind === 'live'
+                    ? '<span class="bg-amber-100 text-amber-700 px-2 py-1 rounded-lg font-black">LIVE</span>'
+                    : '<span class="bg-indigo-100 text-indigo-700 px-2 py-1 rounded-lg font-black">SOLO</span>'}
+            </td>
+            <td class="py-3 px-4 font-black text-slate-700">${r._kind === 'live' ? `Сесия ${r.sessionId || '-'}` : (r.studentName || '-')}</td>
+            <td class="py-3 px-4 text-slate-500 truncate max-w-[120px]">${r.quizTitle || '-'}</td>
+            <td class="py-3 px-4 text-slate-400 font-mono">${r._kind === 'live' ? formatDate(r.timestampMs) : formatDate(r.timestamp)}</td>
+            <td class="py-3 px-4 text-right"><span class="bg-indigo-100 text-indigo-600 px-2 py-1 rounded-lg font-black">${r._kind === 'live' ? (r.scoreLabel || '-') : (r.score || '-')}</span></td>
             <td class="py-3 px-4 text-center">
-                <button onclick="window.deleteSoloResult('${r.id}')" class="text-rose-400 hover:text-rose-600 p-2 rounded-lg hover:bg-rose-50 transition-all" title="Изтрий резултат">
-                    <i data-lucide="trash-2" class="w-4 h-4"></i>
-                </button>
+                <div class="flex items-center justify-center gap-1">
+                    ${r._kind === 'live'
+                        ? `<button onclick="window.downloadLiveReport('${r.id}')" class="text-indigo-500 hover:text-indigo-700 p-2 rounded-lg hover:bg-indigo-50 transition-all" title="Изтегли live рапорт (PDF)"><i data-lucide="download" class="w-4 h-4"></i></button>
+                           <button onclick="window.deleteLiveReport('${r.id}')" class="text-rose-400 hover:text-rose-600 p-2 rounded-lg hover:bg-rose-50 transition-all" title="Изтрий live рапорт"><i data-lucide="trash-2" class="w-4 h-4"></i></button>`
+                        : `<button onclick="window.downloadSoloResult('${r.id}')" class="text-indigo-500 hover:text-indigo-700 p-2 rounded-lg hover:bg-indigo-50 transition-all" title="Изтегли резултат (PDF)"><i data-lucide="download" class="w-4 h-4"></i></button>
+                           <button onclick="window.deleteSoloResult('${r.id}')" class="text-rose-400 hover:text-rose-600 p-2 rounded-lg hover:bg-rose-50 transition-all" title="Изтрий резултат"><i data-lucide="trash-2" class="w-4 h-4"></i></button>`}
+                </div>
             </td>
         </tr>
-    `).join('') || '<tr><td colspan="5" class="py-6 text-center text-slate-300 italic">Няма данни</td></tr>';
+    `).join('') || '<tr><td colspan="6" class="py-6 text-center text-slate-300 italic">Няма данни</td></tr>';
     if (window.lucide) lucide.createIcons();
 }
 
@@ -668,12 +850,33 @@ const createUniqueSessionPin = async () => {
     return generateNumericPin(4);
 };
 
+const renderHostSessionQRCode = (pin) => {
+    const qrContainer = document.getElementById('qr-container');
+    const qrCodeEl = document.getElementById('qr-code');
+    if (!qrContainer || !qrCodeEl || !pin) return;
+
+    const joinUrl = `${window.location.origin}${window.location.pathname}?join=${encodeURIComponent(pin)}`;
+    const qrDataUrl = generateQRCode(joinUrl, 180);
+    if (!qrDataUrl) {
+        // Merge-note: keep fallback link visible (do NOT hide qrContainer on failure),
+        // otherwise teacher sees no join affordance when QR generation fails.
+        qrCodeEl.innerHTML = `<a href="${joinUrl}" target="_blank" rel="noopener" class="text-[11px] font-black text-indigo-600 underline break-all">Вход линк: ${joinUrl}</a>`;
+        qrContainer.classList.remove('hidden');
+        return;
+    }
+
+    qrCodeEl.innerHTML = `<img src="${qrDataUrl}" alt="QR за вход в live сесия" class="w-[180px] h-[180px] rounded-xl border border-slate-200 bg-white p-2">`;
+    qrContainer.classList.remove('hidden');
+};
+
 window.openLiveHost = async () => {
     if (!user) return;
     sessionID = await createUniqueSessionPin();
     sessionDocId = sessionID;
+    hostLeaderboardExpanded = false;
     window.switchScreen('live-host');
     document.getElementById('host-pin').innerText = sessionID;
+    renderHostSessionQRCode(sessionID);
 
     const totalPoints = currentQuiz.q.reduce((a, q) => a + (q.points || 1), 0);
 
@@ -838,13 +1041,26 @@ function renderHostDashboard() {
         const givenAnswers = Object.values(answersObj).filter(v => v === true || v === false).length;
         const correctAnswers = Object.values(answersObj).filter(v => v === true).length;
         const accuracy = givenAnswers > 0 ? Math.round((correctAnswers / givenAnswers) * 100) : 0;
+        const engagementPct = quizQuestions.length > 0 ? Math.round((givenAnswers / quizQuestions.length) * 100) : 0;
+        const scorePct = totalMax > 0 ? Math.round(((p.score || 0) / totalMax) * 100) : 0;
 
         const reactionValues = Object.values(p.reactionMs || {}).filter(v => typeof v === 'number' && v >= 0);
         const bestReactionMs = reactionValues.length ? Math.min(...reactionValues) : null;
-        return { ...p, givenAnswers, correctAnswers, accuracy, bestReactionMs };
+        const riskSignals = [];
+        if (engagementPct < RISK_THRESHOLDS.minEngagementPct) riskSignals.push('ниска активност');
+        if (accuracy < RISK_THRESHOLDS.minAccuracyPct) riskSignals.push('ниска точност');
+        if (scorePct < RISK_THRESHOLDS.minScorePct) riskSignals.push('нисък резултат');
+        return { ...p, givenAnswers, correctAnswers, accuracy, bestReactionMs, riskSignals };
     }).sort((a, b) => (b.score - a.score) || (b.accuracy - a.accuracy));
 
-    document.getElementById('host-results-body').innerHTML = leaderboard
+    const maxCompactRows = 10;
+    const visibleLeaderboard = hostLeaderboardExpanded ? leaderboard : leaderboard.slice(0, maxCompactRows);
+    const renderRiskSignalsLine = (participant) => {
+        if (!hostLeaderboardExpanded || participant.riskSignals.length === 0) return '';
+        return `<div class="mt-1 text-[10px] text-amber-600 font-bold">Рискови сигнали: ${participant.riskSignals.join(', ')}</div>`;
+    };
+
+    const rowsHtml = visibleLeaderboard
         .map((p, idx) => `
         <tr class="border-b transition-all hover:bg-slate-50 animate-pop">
             <td class="py-3 px-3 font-black text-xs sm:text-sm">
@@ -852,8 +1068,10 @@ function renderHostDashboard() {
                     <span class="text-slate-300 w-5">${idx+1}.</span>
                     <span class="text-lg">${p.avatar || '👤'}</span>
                     <span class="truncate">${p.name}</span>
+                    ${p.riskSignals.length > 0 ? `<span class="text-[9px] font-black uppercase bg-amber-100 text-amber-700 px-2 py-1 rounded-lg">⚠ Риск</span>` : ''}
                 </div>
                 <div class="mt-1 text-[10px] text-slate-400 font-bold">Отг.: ${p.givenAnswers}/${quizQuestions.length || 0} · Точност: ${p.accuracy}%${p.bestReactionMs !== null ? ` · ⚡ ${(p.bestReactionMs / 1000).toFixed(2)}s` : ''}</div>
+                ${renderRiskSignalsLine(p)}
             </td>
             <td class="py-3 px-3 text-right"><span class="bg-indigo-100 text-indigo-600 px-3 py-1 rounded-xl font-black text-xs sm:text-sm">${p.score} / ${totalMax || 0}</span></td>
             <td class="py-3 px-2 text-center">
@@ -862,13 +1080,113 @@ function renderHostDashboard() {
                 </button>
             </td>
         </tr>`).join('');
+
+    const toggleRow = leaderboard.length > maxCompactRows
+        ? `<tr>
+            <td colspan="3" class="py-2 px-2 text-center bg-slate-50">
+                <button onclick="window.toggleHostLeaderboard()" class="text-[10px] font-black uppercase text-indigo-600 hover:text-indigo-800">
+                    ${hostLeaderboardExpanded ? `Покажи само топ ${maxCompactRows}` : `Покажи всички (${leaderboard.length})`}
+                </button>
+            </td>
+          </tr>`
+        : '';
+
+    document.getElementById('host-results-body').innerHTML = rowsHtml + toggleRow;
+    renderHostLiveVisualizations(leaderboard, quizQuestions);
     if (window.lucide) lucide.createIcons();
 }
+
+function renderHostLiveVisualizations(leaderboard, quizQuestions) {
+    const classContainer = document.getElementById('host-question-visualization');
+    const studentSelect = document.getElementById('host-student-visual-select');
+    const studentContainer = document.getElementById('host-student-visualization');
+    if (!classContainer || !studentSelect || !studentContainer) return;
+
+    const analytics = getClassQuestionStats();
+    const rows = analytics?.rows || [];
+    classContainer.innerHTML = rows.length
+        ? rows.map((r) => `
+            <div class="bg-slate-50 rounded-xl p-2 border">
+                <div class="text-[10px] font-black text-slate-700 mb-1">В${r.qIdx + 1}: ${r.questionText || '-'}</div>
+                <div class="w-full h-2 bg-slate-200 rounded-full overflow-hidden flex">
+                    <div class="h-full bg-emerald-500" style="width:${Math.max(0, Math.min(100, r.classCorrectPct || 0))}%"></div>
+                    <div class="h-full bg-rose-300" style="width:${Math.max(0, Math.min(100, r.classWrongPct || 0))}%"></div>
+                </div>
+                <div class="mt-1 text-[10px] text-slate-500 font-bold">
+                    Верни: ${r.correct} · Грешни: ${r.wrong} · Без отговор: ${r.missing}
+                </div>
+            </div>
+        `).join('')
+        : '<div class="text-[10px] text-slate-400 italic">Няма данни за визуализация.</div>';
+
+    const selectedId = studentSelect.value;
+    studentSelect.innerHTML = leaderboard.length
+        ? leaderboard.map((p) => `<option value="${p.id}">${p.name || 'Участник'}</option>`).join('')
+        : '<option value="">Няма участници</option>';
+    if (selectedId && leaderboard.some((p) => p.id === selectedId)) {
+        studentSelect.value = selectedId;
+    }
+
+    const renderSelectedStudent = () => {
+        const selected = leaderboard.find((p) => p.id === studentSelect.value) || leaderboard[0];
+        if (!selected) {
+            studentContainer.innerHTML = '<div class="text-[10px] text-slate-400 italic">Няма ученик за преглед.</div>';
+            return;
+        }
+        const answers = selected.answers || {};
+        studentContainer.innerHTML = (quizQuestions || []).map((q, idx) => {
+            let answer = answers[idx];
+            if (answer === undefined) answer = answers[String(idx)];
+            const status = answer === true ? 'Верен' : (answer === false ? 'Грешен' : 'Без отговор');
+            const statusClass = answer === true
+                ? 'bg-emerald-100 text-emerald-700'
+                : (answer === false ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-500');
+            return `<div class="flex items-center justify-between gap-2 text-[10px] border rounded-lg px-2 py-1">
+                <span class="truncate font-black text-slate-700">В${idx + 1}. ${q?.text || '-'}</span>
+                <span class="px-2 py-0.5 rounded-md font-black ${statusClass}">${status}</span>
+            </div>`;
+        }).join('') || '<div class="text-[10px] text-slate-400 italic">Няма въпроси.</div>';
+    };
+
+    if (!studentSelect.dataset.boundChange) {
+        studentSelect.addEventListener('change', renderSelectedStudent);
+        studentSelect.dataset.boundChange = '1';
+    }
+    renderSelectedStudent();
+}
+
+window.toggleHostLeaderboard = () => {
+    hostLeaderboardExpanded = !hostLeaderboardExpanded;
+    renderHostDashboard();
+};
 
 window.finishLiveSession = async () => {
     if (!sessionID) return;
     try {
         await updateDoc(getSessionRefById(sessionDocId), { status: 'finished' });
+        if (user) {
+            const analytics = getClassQuestionStats();
+            const highlights = getLiveSessionTeacherHighlights();
+            const liveReportPayload = {
+                sessionId: sessionID,
+                quizTitle: currentQuiz?.title || 'Без име',
+                participantsCount: analytics.summary?.participantsCount ?? lastFetchedParticipants.length,
+                scoreLabel: `${analytics.summary?.totalCorrect ?? 0}/${analytics.summary?.totalAnswered ?? 0}`,
+                analyticsSummary: analytics.summary || null,
+                highlights,
+                participants: lastFetchedParticipants.map((p) => ({
+                    id: p.id || '',
+                    name: p.name || 'Участник',
+                    avatar: p.avatar || '👤',
+                    score: p.score || 0,
+                    answers: p.answers || {},
+                    reactionMs: p.reactionMs || {}
+                })),
+                timestampMs: Date.now(),
+                createdAt: serverTimestamp()
+            };
+            await addDoc(getTeacherLiveReportsCollection(user.uid), liveReportPayload);
+        }
         document.getElementById('export-buttons-container').classList.remove('hidden');
         document.getElementById('export-buttons-container').classList.add('flex');
         window.showMessage("Сесията приключи!");
@@ -882,17 +1200,34 @@ function getResultsData() {
     if (!currentQuiz || !lastFetchedParticipants) return [];
 
     const totalMax = currentQuiz.q.reduce((a, b) => a + (b.points || 1), 0);
+    const totalQuestions = currentQuiz.q.length || 0;
+
+    const getReactionSummary = (participant) => {
+        const reactionMs = participant?.reactionMs || {};
+        const values = Object.values(reactionMs).filter((v) => typeof v === 'number' && Number.isFinite(v) && v >= 0);
+        if (values.length === 0) {
+            return { answeredCount: 0, avgReactionSeconds: '-' };
+        }
+        const avgMs = Math.round(values.reduce((a, b) => a + b, 0) / values.length);
+        return {
+            answeredCount: values.length,
+            avgReactionSeconds: (avgMs / 1000).toFixed(2)
+        };
+    };
 
     let data = [];
-    let header = ["Позиция", "Име", `Точки (Макс: ${totalMax})`];
+    let header = ["Позиция", "Име", `Точки (Макс: ${totalMax})`, "Отговорени", "Средна реакция (s)"];
     currentQuiz.q.forEach((_, idx) => header.push(`Въпрос ${idx + 1}`));
     data.push(header);
 
     [...lastFetchedParticipants].sort((a,b)=>b.score-a.score).forEach((p,i) => {
+        const reactionSummary = getReactionSummary(p);
         let row = [
             (i+1),
             p.name,
-            p.score
+            p.score,
+            `${reactionSummary.answeredCount}/${totalQuestions}`,
+            reactionSummary.avgReactionSeconds
         ];
 
         currentQuiz.q.forEach((_, qIdx) => {
@@ -949,6 +1284,9 @@ function getClassQuestionStats() {
         const missing = Math.max(0, participantsCount - answered);
         const correctPct = answered > 0 ? Math.round((correct / answered) * 100) : 0;
         const wrongPct = answered > 0 ? Math.round((wrong / answered) * 100) : 0;
+        const responseRatePct = participantsCount > 0 ? Math.round((answered / participantsCount) * 100) : 0;
+        const classCorrectPct = participantsCount > 0 ? Math.round((correct / participantsCount) * 100) : 0;
+        const classWrongPct = participantsCount > 0 ? Math.round((wrong / participantsCount) * 100) : 0;
 
         return {
             qIdx,
@@ -960,6 +1298,9 @@ function getClassQuestionStats() {
             participantsCount,
             correctPct,
             wrongPct,
+            responseRatePct,
+            classCorrectPct,
+            classWrongPct,
             firstCorrectName,
             firstCorrectSeconds: firstCorrectMs !== null ? (firstCorrectMs / 1000).toFixed(2) : '-'
         };
@@ -967,20 +1308,75 @@ function getClassQuestionStats() {
 
     const totalCorrect = stats.reduce((a, r) => a + r.correct, 0);
     const totalWrong = stats.reduce((a, r) => a + r.wrong, 0);
+    const totalMissing = stats.reduce((a, r) => a + r.missing, 0);
     const totalAnswered = totalCorrect + totalWrong;
     const classCorrectPct = totalAnswered > 0 ? Math.round((totalCorrect / totalAnswered) * 100) : 0;
     const classWrongPct = totalAnswered > 0 ? Math.round((totalWrong / totalAnswered) * 100) : 0;
+    const expectedAnswers = participantsCount * stats.length;
+    const answerCoveragePct = expectedAnswers > 0 ? Math.round((totalAnswered / expectedAnswers) * 100) : 0;
 
     return {
         rows: stats,
         summary: {
             participantsCount,
+            questionsCount: stats.length,
+            expectedAnswers,
             totalAnswered,
+            totalMissing,
             totalCorrect,
             totalWrong,
             classCorrectPct,
-            classWrongPct
+            classWrongPct,
+            answerCoveragePct
         }
+    };
+}
+
+function getLiveSessionTeacherHighlights() {
+    const participants = [...(lastFetchedParticipants || [])];
+    if (!participants.length) {
+        return {
+            topScorer: '-',
+            mostActive: '-',
+            atRiskCount: 0,
+            atRiskList: ''
+        };
+    }
+
+    const sortedByScore = [...participants].sort((a, b) => (b.score || 0) - (a.score || 0));
+    const topScorer = sortedByScore[0]?.name || 'Участник';
+
+    const getAnsweredCount = (participant) => {
+        const answers = participant?.answers || {};
+        return Object.values(answers).filter((v) => v === true || v === false).length;
+    };
+    const sortedByActivity = [...participants].sort((a, b) => getAnsweredCount(b) - getAnsweredCount(a));
+    const mostActiveName = sortedByActivity[0]?.name || 'Участник';
+    const mostActiveCount = getAnsweredCount(sortedByActivity[0]);
+
+    const totalQuestions = currentQuiz?.q?.length || 0;
+    const totalMaxPoints = (currentQuiz?.q || []).reduce((sum, q) => sum + (q.points || 1), 0);
+    const atRisk = participants
+        .map((participant) => {
+            const answers = participant?.answers || {};
+            const givenAnswers = Object.values(answers).filter((v) => v === true || v === false).length;
+            const correctAnswers = Object.values(answers).filter((v) => v === true).length;
+            const engagementPct = totalQuestions > 0 ? Math.round((givenAnswers / totalQuestions) * 100) : 0;
+            const accuracyPct = givenAnswers > 0 ? Math.round((correctAnswers / givenAnswers) * 100) : 0;
+            const scorePct = totalMaxPoints > 0 ? Math.round(((participant.score || 0) / totalMaxPoints) * 100) : 0;
+            const flags = [];
+            if (engagementPct < RISK_THRESHOLDS.minEngagementPct) flags.push('активност');
+            if (accuracyPct < RISK_THRESHOLDS.minAccuracyPct) flags.push('точност');
+            if (scorePct < RISK_THRESHOLDS.minScorePct) flags.push('резултат');
+            return flags.length > 0 ? `${participant.name || 'Участник'} (${flags.join('/')})` : null;
+        })
+        .filter(Boolean);
+
+    return {
+        topScorer,
+        mostActive: `${mostActiveName} (${mostActiveCount})`,
+        atRiskCount: atRisk.length,
+        atRiskList: atRisk.slice(0, 5).join(', ')
     };
 }
 
@@ -1068,6 +1464,7 @@ window.exportExcel = () => {
     if (data.length === 0) return window.showMessage("Няма данни за експорт.", "error");
 
     const analytics = getClassQuestionStats();
+    const highlights = getLiveSessionTeacherHighlights();
     const wb = XLSX.utils.book_new();
 
     const wsResults = XLSX.utils.aoa_to_sheet(data);
@@ -1076,21 +1473,32 @@ window.exportExcel = () => {
     const summaryRows = [
         ["СЕСИЯ", sessionID],
         ["УЧАСТНИЦИ", analytics.summary?.participantsCount ?? 0],
+        ["ВЪПРОСИ", analytics.summary?.questionsCount ?? 0],
+        ["ОЧАКВАНИ ОТГОВОРИ", analytics.summary?.expectedAnswers ?? 0],
         ["ОБЩО ОТГОВОРИ", analytics.summary?.totalAnswered ?? 0],
+        ["БЕЗ ОТГОВОР", analytics.summary?.totalMissing ?? 0],
+        ["ПОКРИТИЕ НА ОТГОВОРИТЕ", `${analytics.summary?.answerCoveragePct ?? 0}%`],
         ["ВЕРНИ", `${analytics.summary?.totalCorrect ?? 0} (${analytics.summary?.classCorrectPct ?? 0}%)`],
         ["ГРЕШНИ", `${analytics.summary?.totalWrong ?? 0} (${analytics.summary?.classWrongPct ?? 0}%)`],
+        ["ТОП РЕЗУЛТАТ", highlights.topScorer],
+        ["НАЙ-АКТИВЕН", highlights.mostActive],
+        ["РИСКОВИ УЧЕНИЦИ", highlights.atRiskCount],
+        ["РИСКОВ СПИСЪК (TOP 5)", highlights.atRiskList || "-"],
         []
     ];
 
-    const questionHeader = ["Въпрос", "Текст", "Верни", "Грешни", "Без отговор", "% Верни", "% Грешни", "Първи верен", "Време (s)"];
+    const questionHeader = ["Въпрос", "Текст", "Верни", "Грешни", "Без отговор", "Активност", "% Верни (отговорили)", "% Грешни (отговорили)", "% Верни (клас)", "% Грешни (клас)", "Първи верен", "Време (s)"];
     const questionRows = analytics.rows.map((r) => [
         r.qIdx + 1,
         r.questionText,
         r.correct,
         r.wrong,
         r.missing,
+        `${r.responseRatePct}%`,
         `${r.correctPct}%`,
         `${r.wrongPct}%`,
+        `${r.classCorrectPct}%`,
+        `${r.classWrongPct}%`,
         r.firstCorrectName,
         r.firstCorrectSeconds
     ]);
@@ -1109,6 +1517,7 @@ window.exportPDF = () => {
   if (!data || data.length === 0) return window.showMessage("Няма данни за PDF експорт.", "error");
 
   const analytics = getClassQuestionStats?.() || { rows: [] };
+  const highlights = getLiveSessionTeacherHighlights();
 
   // data is like: [headRow, ...bodyRows]
   const [head, ...body] = data;
@@ -1162,15 +1571,18 @@ window.exportPDF = () => {
     `;
   };
 
-  const analyticsHead = ['№','Въпрос','Верни','Грешни','Без отговор','% Верни','% Грешни','Първи верен','Време (s)'];
+  const analyticsHead = ['№','Въпрос','Верни','Грешни','Без отговор','Активност','% Верни (отговорили)','% Грешни (отговорили)','% Верни (клас)','% Грешни (клас)','Първи верен','Време (s)'];
   const analyticsBody = (analytics.rows || []).map(r => ([
     String((r.qIdx ?? 0) + 1),
     r.questionText ?? "",
     String(r.correct ?? 0),
     String(r.wrong ?? 0),
     String(r.missing ?? 0),
+    `${r.responseRatePct ?? 0}%`,
     `${r.correctPct ?? 0}%`,
     `${r.wrongPct ?? 0}%`,
+    `${r.classCorrectPct ?? 0}%`,
+    `${r.classWrongPct ?? 0}%`,
     r.firstCorrectName ?? "—",
     String(r.firstCorrectSeconds ?? "—")
   ]));
@@ -1200,6 +1612,12 @@ window.exportPDF = () => {
 
   <div class="summary">
     <div>• Брой участници: <b>${esc(body.length)}</b></div>
+    <div>• Брой въпроси: <b>${esc(analytics.summary?.questionsCount ?? 0)}</b></div>
+    <div>• Покритие на отговорите: <b>${esc(analytics.summary?.answerCoveragePct ?? 0)}%</b></div>
+    <div>• Топ резултат: <b>${esc(highlights.topScorer)}</b></div>
+    <div>• Най-активен: <b>${esc(highlights.mostActive)}</b></div>
+    <div>• Рискови ученици: <b>${esc(highlights.atRiskCount ?? 0)}</b></div>
+    ${highlights.atRiskList ? `<div>• Рисков списък (TOP 5): <b>${esc(highlights.atRiskList)}</b></div>` : ""}
     ${avgPct === null ? "" : `<div>• Среден успех на класа: <b>${avgPct}%</b></div>`}
   </div>
 
@@ -1463,14 +1881,16 @@ window.renderLiveQuestionUI = (q) => {
     </div>`;
 
     if (q.type === 'single') {
-        container.innerHTML = q.options.map((o, i) => `
-            <button onclick="window.selectLiveOption(this, ${i})" class="client-opt-btn w-full p-4 text-left bg-slate-50 border-2 border-slate-100 rounded-2xl font-black text-slate-800 shadow-sm hover:border-indigo-300 transition-all text-sm mb-2">${o}</button>
+        const shuffledSingle = getShuffledOptionEntries(q.options);
+        container.innerHTML = shuffledSingle.map((item) => `
+            <button onclick="window.selectLiveOption(this, ${item.originalIndex})" class="client-opt-btn w-full p-4 text-left bg-slate-50 border-2 border-slate-100 rounded-2xl font-black text-slate-800 shadow-sm hover:border-indigo-300 transition-all text-sm mb-2">${item.label}</button>
         `).join('') + btnHtml;
         document.getElementById('btn-submit-live-unified').onclick = window.submitLiveSingleConfirm;
     } else if (q.type === 'multiple') {
-        container.innerHTML = q.options.map((o, i) => `
+        const shuffledMultiple = getShuffledOptionEntries(q.options);
+        container.innerHTML = shuffledMultiple.map((item) => `
             <label class="flex items-center gap-4 w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl font-black text-slate-800 cursor-pointer text-sm mb-2">
-                <input type="checkbox" name="c-multiple" value="${i}" class="w-6 h-6" onchange="window.selectLiveMultiple()"> ${o}
+                <input type="checkbox" name="c-multiple" value="${item.originalIndex}" class="w-6 h-6" onchange="window.selectLiveMultiple()"> ${item.label}
             </label>
         `).join('') + btnHtml;
         document.getElementById('btn-submit-live-unified').onclick = window.submitLiveMultipleConfirm;
@@ -1578,6 +1998,7 @@ window.submitLiveFinal = async (isCorrect) => {
         lastAnsweredIdx: liveActiveQIdx,
         lastResult: isCorrect
     };
+    const explanationText = window.currentLiveQ?.explanation ? String(window.currentLiveQ.explanation).trim() : '';
     const reactionMs = window.currentLiveQStartedAtMs ? Math.max(0, Date.now() - window.currentLiveQStartedAtMs) : null;
     updatePayload[`answers.${liveActiveQIdx}`] = isCorrect;
     if (reactionMs !== null) updatePayload[`reactionMs.${liveActiveQIdx}`] = reactionMs;
@@ -1585,7 +2006,10 @@ window.submitLiveFinal = async (isCorrect) => {
     try {
         if (currentParticipantRef) {
             await updateDoc(currentParticipantRef, updatePayload);
-            document.getElementById('waiting-status-text').innerText = isCorrect ? "ВЕРЕН ОТГОВОР! ✨" : "ГРЕШЕН ОТГОВОР... ❌";
+            const baseMsg = isCorrect ? "ВЕРЕН ОТГОВОР! ✨" : "ГРЕШЕН ОТГОВОР... ❌";
+            document.getElementById('waiting-status-text').innerHTML = explanationText
+                ? `<div class="space-y-2"><div>${baseMsg}</div><div class="text-xs text-amber-200 font-bold">💡 ${explanationText}</div></div>`
+                : baseMsg;
         }
     } catch (e) {
         console.error(e);
@@ -1613,6 +2037,11 @@ const readQuestionWithSpeech = (text) => {
         console.error('Speech reader failed:', e);
     }
 };
+
+const getShuffledOptionEntries = (options = []) =>
+    options
+        .map((label, originalIndex) => ({ label, originalIndex }))
+        .sort(() => Math.random() - 0.5);
 
 // --- SOLO LOGIC ---
 window.startIndividual = async () => {
@@ -1727,10 +2156,12 @@ window.triggerSoloQuestion = (q) => {
 
     if (q.type === 'single') {
         window.soloPendingAnswer = null;
-        container.innerHTML = q.options.map((o, i) => `<button onclick="window.selectSoloPending(${i}, this)" class="solo-choice w-full p-4 text-left bg-white/10 border border-white/20 rounded-2xl font-black text-white hover:bg-white/20 transition-all text-sm">${o}</button>`).join('')
+        const shuffledSingle = getShuffledOptionEntries(q.options);
+        container.innerHTML = shuffledSingle.map((item) => `<button onclick="window.selectSoloPending(${item.originalIndex}, this)" class="solo-choice w-full p-4 text-left bg-white/10 border border-white/20 rounded-2xl font-black text-white hover:bg-white/20 transition-all text-sm">${item.label}</button>`).join('')
             + `<button id="solo-confirm-btn" onclick="window.confirmSoloPending()" class="w-full mt-4 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs opacity-60 pointer-events-none">Потвърди избора</button>`;
     } else if (q.type === 'multiple') {
-        container.innerHTML = q.options.map((o, i) => `<label class="flex items-center gap-4 w-full p-4 bg-white/10 border border-white/20 rounded-2xl font-black text-white cursor-pointer text-sm mb-2"><input type="checkbox" name="s-multiple" value="${i}" class="w-5 h-5"> ${o}</label>`).join('') + `<button onclick="window.submitSoloMultiple()" class="w-full mt-4 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs">Изпрати</button>`;
+        const shuffledMultiple = getShuffledOptionEntries(q.options);
+        container.innerHTML = shuffledMultiple.map((item) => `<label class="flex items-center gap-4 w-full p-4 bg-white/10 border border-white/20 rounded-2xl font-black text-white cursor-pointer text-sm mb-2"><input type="checkbox" name="s-multiple" value="${item.originalIndex}" class="w-5 h-5"> ${item.label}</label>`).join('') + `<button onclick="window.submitSoloMultiple()" class="w-full mt-4 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs">Изпрати</button>`;
     } else if (q.type === 'boolean') {
         window.soloPendingAnswer = null;
         container.innerHTML = `<div class="grid grid-cols-2 gap-4">
@@ -1849,7 +2280,12 @@ window.submitSoloFinal(isCorrect);
 };
 
 window.submitSoloFinal = (isCorrect) => {
+    const explanationText = currentQuiz?.q?.[currentQIndex]?.explanation ? String(currentQuiz.q[currentQIndex].explanation).trim() : '';
     if (isCorrect) scoreCount += (currentQuiz.q[currentQIndex].points || 1);
+    if (explanationText) {
+        const label = isCorrect ? "✅ Вярно." : "❌ Невярно.";
+        window.showMessage(`${label} 💡 ${explanationText}`, isCorrect ? 'info' : 'error');
+    }
     stopSpeechReader();
     document.getElementById('ind-overlay').classList.add('hidden');
     document.getElementById('ind-overlay').classList.remove('flex');
@@ -2028,6 +2464,8 @@ window.openQuestionModal = () => {
     editingQuestionIndex = null;
     document.getElementById('m-title-text').innerText = "Нов въпрос";
     document.getElementById('m-text').value = '';
+    const explanationInput = document.getElementById('m-explanation');
+    if (explanationInput) explanationInput.value = '';
     document.getElementById('modal-q').classList.remove('hidden');
     document.getElementById('modal-q').classList.add('flex');
     document.getElementById('m-time').innerText = formatTime(player.getCurrentTime());
@@ -2104,6 +2542,8 @@ window.saveQuestion = () => {
     if (!text) return window.showMessage("Въведете текст!", "error");
     let timeVal = editingQuestionIndex !== null ? questions[editingQuestionIndex].time : Math.floor(player.getCurrentTime());
     let qData = { time: timeVal, text, type, points: parseInt(document.getElementById('m-points').value) || 1 };
+    const explanation = document.getElementById('m-explanation')?.value.trim();
+    if (explanation) qData.explanation = explanation;
 
     if (type === 'single' || type === 'multiple' || type === 'ordering' || type === 'timeline') {
         const rows = Array.from(document.querySelectorAll('#m-opts-list .option-row'));
@@ -2161,6 +2601,8 @@ window.editQuestionContent = (index) => {
     document.getElementById('m-text').value = q.text;
     document.getElementById('m-type').value = q.type;
     document.getElementById('m-points').value = q.points || 1;
+    const explanationInput = document.getElementById('m-explanation');
+    if (explanationInput) explanationInput.value = q.explanation || '';
     document.getElementById('m-time').innerText = formatTime(q.time);
     document.getElementById('modal-q').classList.remove('hidden');
     document.getElementById('modal-q').classList.add('flex');
@@ -2221,6 +2663,7 @@ function renderEditorList() {
                 ${q.type === 'open' ? '✏️ Отворен отговор' : ''}
                 ${q.type === 'ordering' ? '↕️ Подреждане' : ''}
             </div>
+            ${q.explanation ? `<div class="text-[10px] text-amber-700 font-bold bg-amber-50 border border-amber-100 rounded-lg px-2 py-1">💡 ${q.explanation}</div>` : ''}
         </div>
     `).join('') || '<p class="text-center text-slate-300 italic py-6 text-xs">Добавете въпроси.</p>';
     if (window.lucide) lucide.createIcons();
@@ -2237,6 +2680,9 @@ window.deleteEditorQuestion = (i) => { if (confirm("Изтриване на въ
 
 window.saveQuizToLibrary = async () => {
     if (!user) return;
+    if (!editingQuizId && currentAccessLevel === 'trial' && myQuizzes.length >= 5) {
+        return window.showMessage("Триал планът позволява до 5 урока. Свържете се с администратор за пълен достъп.", "error");
+    }
     let title = "";
     const existing = editingQuizId ? myQuizzes.find(x => x.id === editingQuizId) : null;
     title = prompt("Име на урока:", existing?.title || "");
@@ -2315,24 +2761,65 @@ window.requestStorageAccess = async function() {
 // --- АДМИНИСТРАТОРСКИ ПАНЕЛ (само за admin) ---
 window.openAdminPanel = async function() {
   try {
-    window.showMessage("📊 Зареждам статистики...", "info");
-    
-    const getAdminStatsFunc = httpsCallable(functions, 'getAdminStats');
-    const result = await getAdminStatsFunc();
-    const stats = result.data;
-    
-    const message = `📊 АДМИН СТАТИСТИКИ:
-━━━━━━━━━━━━━━━━━━━━━
-👥 Учители: ${stats.totalTeachers}
-📚 Уроци: ${stats.totalQuizzes}
-📝 Соло резултати: ${stats.totalSoloResults}
-🎬 Сесии на живо: ${stats.totalSessions}
-👩‍🎓 Участници (общо): ${stats.totalParticipants}
-━━━━━━━━━━━━━━━━━━━━━`;
-    
-    window.showMessage(message, "info", 15000); // показва се 15 секунди
+    window.showMessage("📊 Зареждам админ панела...", "info");
+    const myProfileRef = doc(db, 'artifacts', finalAppId, 'users', user.uid, 'settings', 'profile');
+    const myProfileSnap = await getDoc(myProfileRef);
+    const myAccessLevel = myProfileSnap.exists() ? (myProfileSnap.data().accessLevel || 'full') : 'full';
+    if (myAccessLevel !== 'admin' && user.uid !== ADMIN_UID) {
+      return window.showMessage("Нямате администраторски достъп.", "error");
+    }
+
+    const teachersSnap = await getDocs(query(collectionGroup(db, 'profile'), where('role', '==', 'teacher')));
+    const teachers = teachersSnap.docs.map((d) => {
+      const profile = d.data() || {};
+      return {
+        uid: d.ref.parent.parent?.id || '',
+        email: profile.email || 'няма имейл',
+        accessLevel: profile.accessLevel || 'full',
+        ref: d.ref
+      };
+    }).sort((a, b) => a.email.localeCompare(b.email));
+
+    const action = prompt(
+      `АДМИН ПАНЕЛ\n1) Статистика\n2) Промяна на достъп\n\nУчители: ${teachers.length}\nВъведете 1 или 2:`
+    );
+
+    if (action === '1') {
+      const byLevel = teachers.reduce((acc, t) => {
+        acc[t.accessLevel] = (acc[t.accessLevel] || 0) + 1;
+        return acc;
+      }, {});
+      const statsText = `👥 Учители: ${teachers.length}\n🧪 Trial: ${byLevel.trial || 0}\n✅ Full: ${byLevel.full || 0}\n🛡️ Admin: ${byLevel.admin || 0}`;
+      return window.showMessage(statsText, "info");
+    }
+
+    if (action === '2') {
+      const listText = teachers
+        .map((t, i) => `${i + 1}) ${t.email} [${t.accessLevel}]`)
+        .join('\n');
+      const idxRaw = prompt(`Изберете учител:\n${listText}`);
+      const idx = Number(idxRaw) - 1;
+      if (!Number.isInteger(idx) || idx < 0 || idx >= teachers.length) {
+        return window.showMessage("Невалиден избор.", "error");
+      }
+
+      const newLevel = (prompt("Нов достъп (trial/full/admin):", teachers[idx].accessLevel) || '').trim().toLowerCase();
+      if (!['trial', 'full', 'admin'].includes(newLevel)) {
+        return window.showMessage("Невалидно ниво на достъп.", "error");
+      }
+
+      await updateDoc(teachers[idx].ref, { accessLevel: newLevel, accessUpdatedAt: serverTimestamp() });
+      window.showMessage(`Достъпът е обновен: ${teachers[idx].email} → ${newLevel}`, "info");
+      return;
+    }
+
+    window.showMessage("Операцията е отменена.", "info");
   } catch (error) {
     console.error("Admin panel error:", error);
+    if (error?.code === 'permission-denied' || String(error?.message || '').includes('Missing or insufficient permissions')) {
+      window.showMessage(`❌ Липсват Firestore права за admin panel. Нужна е корекция на Security Rules. За проекта "${firebaseConfig.projectId}" изпълнете: firebase use ${firebaseConfig.projectId} && firebase deploy --only firestore:rules`, "error");
+      return;
+    }
     window.showMessage("❌ Грешка: " + (error.message || "Нямате права"), "error");
   }
 };
@@ -2341,4 +2828,3 @@ window.onYouTubeIframeAPIReady = function() {
     isYTReady = true;
     console.log("YouTube API Ready");
 };
-
