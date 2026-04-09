@@ -637,78 +637,100 @@ window.deleteLiveReport = async (id) => {
     }
 };
 
-const downloadTextFile = (fileName, textContent) => {
-    const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+const withPdfDoc = (onReady) => {
+    const JsPdfCtor = window.jspdf?.jsPDF || window.jsPDF;
+    if (!JsPdfCtor) {
+        window.showMessage("PDF библиотеката не е заредена. Моля, опитайте отново.", "error");
+        return null;
+    }
+    const doc = new JsPdfCtor({ unit: 'pt', format: 'a4' });
+    doc.setFont('helvetica');
+    onReady(doc);
+    return doc;
 };
 
-const formatSoloResultAsTeacherReport = (item) => {
-    const now = formatDate(Date.now());
-    const resultDate = item?.timestamp ? formatDate(item.timestamp) : '-';
-    const scoreText = item?.score || '-';
-    return [
-        'РАПОРТ: ИНДИВИДУАЛЕН РЕЗУЛТАТ',
-        '================================',
-        `Ученик: ${item?.studentName || '-'}`,
-        `Урок: ${item?.quizTitle || '-'}`,
-        `Резултат: ${scoreText}`,
-        `Дата на опит: ${resultDate}`,
-        '--------------------------------',
-        `Експортирано: ${now}`
-    ].join('\n');
+const saveSoloResultPdf = (item, stamp) => {
+    const doc = withPdfDoc((pdf) => {
+        const dateText = item?.timestamp ? formatDate(item.timestamp) : '-';
+        let y = 50;
+        pdf.setFontSize(16);
+        pdf.text('VideoQuiz - Индивидуален рапорт', 40, y);
+        y += 24;
+        pdf.setFontSize(11);
+        [
+            `Ученик: ${item?.studentName || '-'}`,
+            `Урок: ${item?.quizTitle || '-'}`,
+            `Резултат: ${item?.score || '-'}`,
+            `Дата на опит: ${dateText}`,
+            `Експортирано: ${formatDate(Date.now())}`
+        ].forEach((line) => {
+            pdf.text(line, 40, y);
+            y += 18;
+        });
+    });
+    if (!doc) return;
+    doc.save(`solo_result_${item.id}_${stamp}.pdf`);
 };
 
-const formatLiveReportAsTeacherReport = (item) => {
+const saveLiveReportPdf = (item, stamp) => {
     const summary = item?.analyticsSummary || {};
     const participants = Array.isArray(item?.participants) ? item.participants : [];
-    const dateText = item?.timestampMs ? formatDate(item.timestampMs) : '-';
-    const avgReaction = Number.isFinite(summary?.avgReactionMs)
-        ? `${Math.round(summary.avgReactionMs / 10) / 100} сек`
-        : '-';
-    const topParticipants = [...participants]
-        .sort((a, b) => (b?.score || 0) - (a?.score || 0))
-        .slice(0, 10)
-        .map((p, idx) => {
-            const answerCount = Object.keys(p?.answers || {}).length;
-            return `${idx + 1}. ${p?.name || 'Участник'} — ${p?.score || 0} т. (${answerCount} отговора)`;
+    const sortedParticipants = [...participants].sort((a, b) => (b?.score || 0) - (a?.score || 0));
+    const doc = withPdfDoc((pdf) => {
+        pdf.setFontSize(16);
+        pdf.text(`VideoQuiz - Live рапорт (${item?.sessionId || '-'})`, 40, 50);
+        pdf.setFontSize(10);
+        const topInfo = [
+            `Урок: ${item?.quizTitle || '-'}`,
+            `Дата: ${item?.timestampMs ? formatDate(item.timestampMs) : '-'}`,
+            `Участници: ${item?.participantsCount || 0}`,
+            `Резултат клас: ${item?.scoreLabel || '-'}`,
+            `Покритие: ${summary?.answerCoveragePct ?? 0}%`,
+            `Верни отговори (клас): ${summary?.classCorrectPct ?? 0}%`
+        ];
+        let y = 72;
+        topInfo.forEach((line) => {
+            pdf.text(line, 40, y);
+            y += 14;
         });
 
-    return [
-        'РАПОРТ: LIVE СЕСИЯ',
-        '================================',
-        `Сесия: ${item?.sessionId || '-'}`,
-        `Урок: ${item?.quizTitle || '-'}`,
-        `Дата: ${dateText}`,
-        `Участници: ${item?.participantsCount || 0}`,
-        `Резултат (клас): ${item?.scoreLabel || '-'}`,
-        `Средна реакция: ${avgReaction}`,
-        '--------------------------------',
-        'ТОП УЧАСТНИЦИ (до 10):',
-        ...(topParticipants.length ? topParticipants : ['- Няма данни за участници']),
-        '--------------------------------',
-        `Експортирано: ${formatDate(Date.now())}`
-    ].join('\n');
+        const tableRows = sortedParticipants.map((p, idx) => {
+            const answersCount = Object.values(p?.answers || {}).filter((v) => v === true || v === false).length;
+            const correctCount = Object.values(p?.answers || {}).filter((v) => v === true).length;
+            const accuracy = answersCount > 0 ? Math.round((correctCount / answersCount) * 100) : 0;
+            return [idx + 1, p?.name || 'Участник', p?.score || 0, `${correctCount}/${answersCount}`, `${accuracy}%`];
+        });
+        if (typeof pdf.autoTable === 'function') {
+            pdf.autoTable({
+                startY: y + 8,
+                head: [['#', 'Участник', 'Точки', 'Верни/Отговорени', 'Точност']],
+                body: tableRows.length ? tableRows : [['-', 'Няма данни', '-', '-', '-']],
+                styles: { fontSize: 9 }
+            });
+        } else {
+            pdf.setFontSize(10);
+            pdf.text('Участници:', 40, y + 14);
+            tableRows.slice(0, 18).forEach((row, index) => {
+                pdf.text(`${row[0]}. ${row[1]} - ${row[2]}т., ${row[3]}, ${row[4]}`, 40, y + 32 + (index * 13));
+            });
+        }
+    });
+    if (!doc) return;
+    doc.save(`live_report_${item.sessionId || item.id}_${stamp}.pdf`);
 };
 
 window.downloadSoloResult = (id) => {
     const item = soloResults.find((r) => r.id === id);
     if (!item) return window.showMessage("Записът не е намерен.", "error");
     const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
-    downloadTextFile(`solo_result_${item.id}_${stamp}.txt`, formatSoloResultAsTeacherReport(item));
+    saveSoloResultPdf(item, stamp);
 };
 
 window.downloadLiveReport = (id) => {
     const item = liveReports.find((r) => r.id === id);
     if (!item) return window.showMessage("Рапортът не е намерен.", "error");
     const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
-    downloadTextFile(`live_report_${item.sessionId || item.id}_${stamp}.txt`, formatLiveReportAsTeacherReport(item));
+    saveLiveReportPdf(item, stamp);
 };
 
 window.setResultsFilter = (filterValue) => {
@@ -790,9 +812,9 @@ function renderSoloResults() {
             <td class="py-3 px-4 text-center">
                 <div class="flex items-center justify-center gap-1">
                     ${r._kind === 'live'
-                        ? `<button onclick="window.downloadLiveReport('${r.id}')" class="text-indigo-500 hover:text-indigo-700 p-2 rounded-lg hover:bg-indigo-50 transition-all" title="Изтегли live рапорт (TXT)"><i data-lucide="download" class="w-4 h-4"></i></button>
+                        ? `<button onclick="window.downloadLiveReport('${r.id}')" class="text-indigo-500 hover:text-indigo-700 p-2 rounded-lg hover:bg-indigo-50 transition-all" title="Изтегли live рапорт (PDF)"><i data-lucide="download" class="w-4 h-4"></i></button>
                            <button onclick="window.deleteLiveReport('${r.id}')" class="text-rose-400 hover:text-rose-600 p-2 rounded-lg hover:bg-rose-50 transition-all" title="Изтрий live рапорт"><i data-lucide="trash-2" class="w-4 h-4"></i></button>`
-                        : `<button onclick="window.downloadSoloResult('${r.id}')" class="text-indigo-500 hover:text-indigo-700 p-2 rounded-lg hover:bg-indigo-50 transition-all" title="Изтегли резултат (TXT)"><i data-lucide="download" class="w-4 h-4"></i></button>
+                        : `<button onclick="window.downloadSoloResult('${r.id}')" class="text-indigo-500 hover:text-indigo-700 p-2 rounded-lg hover:bg-indigo-50 transition-all" title="Изтегли резултат (PDF)"><i data-lucide="download" class="w-4 h-4"></i></button>
                            <button onclick="window.deleteSoloResult('${r.id}')" class="text-rose-400 hover:text-rose-600 p-2 rounded-lg hover:bg-rose-50 transition-all" title="Изтрий резултат"><i data-lucide="trash-2" class="w-4 h-4"></i></button>`}
                 </div>
             </td>
@@ -1070,7 +1092,67 @@ function renderHostDashboard() {
         : '';
 
     document.getElementById('host-results-body').innerHTML = rowsHtml + toggleRow;
+    renderHostLiveVisualizations(leaderboard, quizQuestions);
     if (window.lucide) lucide.createIcons();
+}
+
+function renderHostLiveVisualizations(leaderboard, quizQuestions) {
+    const classContainer = document.getElementById('host-question-visualization');
+    const studentSelect = document.getElementById('host-student-visual-select');
+    const studentContainer = document.getElementById('host-student-visualization');
+    if (!classContainer || !studentSelect || !studentContainer) return;
+
+    const analytics = getClassQuestionStats();
+    const rows = analytics?.rows || [];
+    classContainer.innerHTML = rows.length
+        ? rows.map((r) => `
+            <div class="bg-slate-50 rounded-xl p-2 border">
+                <div class="text-[10px] font-black text-slate-700 mb-1">В${r.qIdx + 1}: ${r.questionText || '-'}</div>
+                <div class="w-full h-2 bg-slate-200 rounded-full overflow-hidden flex">
+                    <div class="h-full bg-emerald-500" style="width:${Math.max(0, Math.min(100, r.classCorrectPct || 0))}%"></div>
+                    <div class="h-full bg-rose-300" style="width:${Math.max(0, Math.min(100, r.classWrongPct || 0))}%"></div>
+                </div>
+                <div class="mt-1 text-[10px] text-slate-500 font-bold">
+                    Верни: ${r.correct} · Грешни: ${r.wrong} · Без отговор: ${r.missing}
+                </div>
+            </div>
+        `).join('')
+        : '<div class="text-[10px] text-slate-400 italic">Няма данни за визуализация.</div>';
+
+    const selectedId = studentSelect.value;
+    studentSelect.innerHTML = leaderboard.length
+        ? leaderboard.map((p) => `<option value="${p.id}">${p.name || 'Участник'}</option>`).join('')
+        : '<option value="">Няма участници</option>';
+    if (selectedId && leaderboard.some((p) => p.id === selectedId)) {
+        studentSelect.value = selectedId;
+    }
+
+    const renderSelectedStudent = () => {
+        const selected = leaderboard.find((p) => p.id === studentSelect.value) || leaderboard[0];
+        if (!selected) {
+            studentContainer.innerHTML = '<div class="text-[10px] text-slate-400 italic">Няма ученик за преглед.</div>';
+            return;
+        }
+        const answers = selected.answers || {};
+        studentContainer.innerHTML = (quizQuestions || []).map((q, idx) => {
+            let answer = answers[idx];
+            if (answer === undefined) answer = answers[String(idx)];
+            const status = answer === true ? 'Верен' : (answer === false ? 'Грешен' : 'Без отговор');
+            const statusClass = answer === true
+                ? 'bg-emerald-100 text-emerald-700'
+                : (answer === false ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-500');
+            return `<div class="flex items-center justify-between gap-2 text-[10px] border rounded-lg px-2 py-1">
+                <span class="truncate font-black text-slate-700">В${idx + 1}. ${q?.text || '-'}</span>
+                <span class="px-2 py-0.5 rounded-md font-black ${statusClass}">${status}</span>
+            </div>`;
+        }).join('') || '<div class="text-[10px] text-slate-400 italic">Няма въпроси.</div>';
+    };
+
+    if (!studentSelect.dataset.boundChange) {
+        studentSelect.addEventListener('change', renderSelectedStudent);
+        studentSelect.dataset.boundChange = '1';
+    }
+    renderSelectedStudent();
 }
 
 window.toggleHostLeaderboard = () => {
@@ -1799,14 +1881,16 @@ window.renderLiveQuestionUI = (q) => {
     </div>`;
 
     if (q.type === 'single') {
-        container.innerHTML = q.options.map((o, i) => `
-            <button onclick="window.selectLiveOption(this, ${i})" class="client-opt-btn w-full p-4 text-left bg-slate-50 border-2 border-slate-100 rounded-2xl font-black text-slate-800 shadow-sm hover:border-indigo-300 transition-all text-sm mb-2">${o}</button>
+        const shuffledSingle = getShuffledOptionEntries(q.options);
+        container.innerHTML = shuffledSingle.map((item) => `
+            <button onclick="window.selectLiveOption(this, ${item.originalIndex})" class="client-opt-btn w-full p-4 text-left bg-slate-50 border-2 border-slate-100 rounded-2xl font-black text-slate-800 shadow-sm hover:border-indigo-300 transition-all text-sm mb-2">${item.label}</button>
         `).join('') + btnHtml;
         document.getElementById('btn-submit-live-unified').onclick = window.submitLiveSingleConfirm;
     } else if (q.type === 'multiple') {
-        container.innerHTML = q.options.map((o, i) => `
+        const shuffledMultiple = getShuffledOptionEntries(q.options);
+        container.innerHTML = shuffledMultiple.map((item) => `
             <label class="flex items-center gap-4 w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl font-black text-slate-800 cursor-pointer text-sm mb-2">
-                <input type="checkbox" name="c-multiple" value="${i}" class="w-6 h-6" onchange="window.selectLiveMultiple()"> ${o}
+                <input type="checkbox" name="c-multiple" value="${item.originalIndex}" class="w-6 h-6" onchange="window.selectLiveMultiple()"> ${item.label}
             </label>
         `).join('') + btnHtml;
         document.getElementById('btn-submit-live-unified').onclick = window.submitLiveMultipleConfirm;
@@ -1954,6 +2038,11 @@ const readQuestionWithSpeech = (text) => {
     }
 };
 
+const getShuffledOptionEntries = (options = []) =>
+    options
+        .map((label, originalIndex) => ({ label, originalIndex }))
+        .sort(() => Math.random() - 0.5);
+
 // --- SOLO LOGIC ---
 window.startIndividual = async () => {
     const pinCode = document.getElementById('ind-quiz-code').value.trim();
@@ -2067,10 +2156,12 @@ window.triggerSoloQuestion = (q) => {
 
     if (q.type === 'single') {
         window.soloPendingAnswer = null;
-        container.innerHTML = q.options.map((o, i) => `<button onclick="window.selectSoloPending(${i}, this)" class="solo-choice w-full p-4 text-left bg-white/10 border border-white/20 rounded-2xl font-black text-white hover:bg-white/20 transition-all text-sm">${o}</button>`).join('')
+        const shuffledSingle = getShuffledOptionEntries(q.options);
+        container.innerHTML = shuffledSingle.map((item) => `<button onclick="window.selectSoloPending(${item.originalIndex}, this)" class="solo-choice w-full p-4 text-left bg-white/10 border border-white/20 rounded-2xl font-black text-white hover:bg-white/20 transition-all text-sm">${item.label}</button>`).join('')
             + `<button id="solo-confirm-btn" onclick="window.confirmSoloPending()" class="w-full mt-4 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs opacity-60 pointer-events-none">Потвърди избора</button>`;
     } else if (q.type === 'multiple') {
-        container.innerHTML = q.options.map((o, i) => `<label class="flex items-center gap-4 w-full p-4 bg-white/10 border border-white/20 rounded-2xl font-black text-white cursor-pointer text-sm mb-2"><input type="checkbox" name="s-multiple" value="${i}" class="w-5 h-5"> ${o}</label>`).join('') + `<button onclick="window.submitSoloMultiple()" class="w-full mt-4 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs">Изпрати</button>`;
+        const shuffledMultiple = getShuffledOptionEntries(q.options);
+        container.innerHTML = shuffledMultiple.map((item) => `<label class="flex items-center gap-4 w-full p-4 bg-white/10 border border-white/20 rounded-2xl font-black text-white cursor-pointer text-sm mb-2"><input type="checkbox" name="s-multiple" value="${item.originalIndex}" class="w-5 h-5"> ${item.label}</label>`).join('') + `<button onclick="window.submitSoloMultiple()" class="w-full mt-4 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs">Изпрати</button>`;
     } else if (q.type === 'boolean') {
         window.soloPendingAnswer = null;
         container.innerHTML = `<div class="grid grid-cols-2 gap-4">
