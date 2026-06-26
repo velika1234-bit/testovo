@@ -21,12 +21,14 @@ service cloud.firestore {
       );
     }
 
-    // Teacher profile settings (admin can read/update all, user can manage own profile)
-    match /artifacts/videoquiz-ultimate-live/users/{userId}/settings/profile {
-      allow read: if isOwner(userId) || isAdmin();
-      allow create: if isOwner(userId) || isAdmin();
-      allow update: if isOwner(userId) || isAdmin();
-      allow delete: if isAdmin();
+    // Teacher profile settings (admin can read/update all, user can manage own profile).
+    // Admin panel uses collectionGroup('settings') with documentId() == 'profile',
+    // so keep the wildcard match and explicitly allow only the profile document.
+    match /artifacts/videoquiz-ultimate-live/users/{userId}/settings/{settingId} {
+      allow read: if settingId == 'profile' && (isOwner(userId) || isAdmin());
+      allow create: if settingId == 'profile' && (isOwner(userId) || isAdmin());
+      allow update: if settingId == 'profile' && (isOwner(userId) || isAdmin());
+      allow delete: if settingId == 'profile' && isAdmin();
     }
 
     // Teacher-owned private collections

@@ -1,5 +1,5 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, serverTimestamp, updateDoc, deleteDoc, addDoc, query, where, limit, getDocs, collectionGroup } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, serverTimestamp, updateDoc, deleteDoc, addDoc, query, where, limit, getDocs, collectionGroup, documentId } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getAuth, signInAnonymously, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 import { getFunctions } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 // --- Импортиране на helper функции от utils.js ---
@@ -256,7 +256,8 @@ window.resolveTeacherUidFromCode = async (decoded) => {
     if (!ownerEmail) return null;
     try {
         const normalizedQ = query(
-            collectionGroup(db, 'profile'),
+            collectionGroup(db, 'settings'),
+            where(documentId(), '==', 'profile'),
             where('role', '==', 'teacher'),
             where('emailNormalized', '==', ownerEmail)
         );
@@ -269,7 +270,8 @@ window.resolveTeacherUidFromCode = async (decoded) => {
             return null;
         }
         const fallbackQ = query(
-            collectionGroup(db, 'profile'),
+            collectionGroup(db, 'settings'),
+            where(documentId(), '==', 'profile'),
             where('role', '==', 'teacher'),
             where('email', '==', ownerEmail)
         );
@@ -2800,7 +2802,14 @@ window.openAdminPanel = async function() {
       return window.showMessage("Нямате администраторски достъп.", "error");
     }
 
-    const teachersSnap = await getDocs(query(collectionGroup(db, 'profile'), where('role', '==', 'teacher')));
+    // Profiles are stored as documents named "profile" inside each user's "settings"
+    // collection. Collection-group queries target collection IDs, not document IDs,
+    // so query the "settings" collection group and constrain the document ID.
+    const teachersSnap = await getDocs(query(
+      collectionGroup(db, 'settings'),
+      where(documentId(), '==', 'profile'),
+      where('role', '==', 'teacher')
+    ));
     const teachers = teachersSnap.docs.map((d) => {
       const profile = d.data() || {};
       return {
