@@ -1,0 +1,58 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function profileDoc(userId) {
+      return /databases/$(database)/documents/artifacts/videoquiz-ultimate-live/users/$(userId)/settings/profile;
+    }
+
+    function isAdmin() {
+      // Keep bootstrap UID fallback + accessLevel check together during merges.
+      return signedIn() && (
+        request.auth.uid == 'uNdGTBsgatZX4uOPTZqKG9qLJVZ2' ||
+        get(profileDoc(request.auth.uid)).data.accessLevel == 'admin'
+      );
+    }
+
+    // Teacher profile settings (admin can read/update all, user can manage own profile).
+    // Admin panel uses collectionGroup('settings') with documentId() == 'profile',
+    // so keep the wildcard match and explicitly allow only the profile document.
+    match /artifacts/videoquiz-ultimate-live/users/{userId}/settings/{settingId} {
+      allow read: if settingId == 'profile' && (isOwner(userId) || isAdmin());
+      allow create: if settingId == 'profile' && (isOwner(userId) || isAdmin());
+      allow update: if settingId == 'profile' && (isOwner(userId) || isAdmin());
+      allow delete: if settingId == 'profile' && isAdmin();
+    }
+
+    // Teacher-owned private collections
+    match /artifacts/videoquiz-ultimate-live/users/{userId}/{subCollection}/{docId} {
+      allow read, write: if isOwner(userId) || isAdmin();
+    }
+
+    // Legacy teacher app scope support
+    match /artifacts/videoquiz-ultimate/users/{userId}/{subCollection}/{docId} {
+      allow read, write: if isOwner(userId) || isAdmin();
+    }
+
+    // Public session state for live gameplay (kept permissive for clients to join/respond)
+    match /artifacts/videoquiz-ultimate-live/public/data/sessions/{sessionId} {
+      allow read, write: if true;
+    }
+
+    match /artifacts/videoquiz-ultimate-live/public/data/sessions/{sessionId}/participants/{participantId} {
+      allow read, write: if true;
+    }
+
+    // Legacy participants collection support
+    match /artifacts/videoquiz-ultimate-live/public/data/participants/{participantId} {
+      allow read, write: if true;
+    }
+  }
+}
