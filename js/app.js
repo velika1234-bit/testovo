@@ -338,6 +338,13 @@ window.switchScreen = (name) => {
     window.scrollTo(0, 0);
 };
 
+const escapeHTML = (value) => String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+
 window.showMessage = (text, type = 'info') => {
     const container = document.getElementById('msg-container');
     if (!container) return;
@@ -351,13 +358,6 @@ window.showMessage = (text, type = 'info') => {
         setTimeout(() => msg.remove(), 500);
     }, 4000);
 };
-
-const escapeHTML = (value) => String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
 
 window.quitHostSession = () => {
     if (confirm("Това ще прекъсне сесията и ще спре таймерите. Сигурни ли сте?")) {
@@ -644,6 +644,8 @@ window.deleteLiveReport = async (id) => {
     }
 };
 
+// Merge-note: keep PDF report downloads here (not JSON). Teachers need readable reports,
+// while analyticsRows keeps the live class-by-question summary available after the session.
 const withPdfDoc = (onReady) => {
     const JsPdfCtor = window.jspdf?.jsPDF || window.jsPDF;
     if (!JsPdfCtor) {
