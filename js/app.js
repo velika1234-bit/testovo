@@ -637,6 +637,16 @@ window.deleteLiveReport = async (id) => {
     }
 };
 
+const downloadJsonFile = (fileName, payload) => {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
 const withPdfDoc = (onReady) => {
     const JsPdfCtor = window.jspdf?.jsPDF || window.jsPDF;
     if (!JsPdfCtor) {
@@ -722,15 +732,23 @@ const saveLiveReportPdf = (item, stamp) => {
 window.downloadSoloResult = (id) => {
     const item = soloResults.find((r) => r.id === id);
     if (!item) return window.showMessage("Записът не е намерен.", "error");
+    const payload = {
+        type: 'solo',
+        studentName: item.studentName || '-',
+        quizTitle: item.quizTitle || '-',
+        score: item.score || '-',
+        timestamp: item.timestamp || null,
+        exportedAt: new Date().toISOString()
+    };
     const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
-    saveSoloResultPdf(item, stamp);
+    downloadJsonFile(`solo_result_${item.id}_${stamp}.json`, payload);
 };
 
 window.downloadLiveReport = (id) => {
     const item = liveReports.find((r) => r.id === id);
     if (!item) return window.showMessage("Рапортът не е намерен.", "error");
     const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
-    saveLiveReportPdf(item, stamp);
+    downloadJsonFile(`live_report_${item.sessionId || item.id}_${stamp}.json`, item);
 };
 
 window.setResultsFilter = (filterValue) => {
@@ -812,9 +830,9 @@ function renderSoloResults() {
             <td class="py-3 px-4 text-center">
                 <div class="flex items-center justify-center gap-1">
                     ${r._kind === 'live'
-                        ? `<button onclick="window.downloadLiveReport('${r.id}')" class="text-indigo-500 hover:text-indigo-700 p-2 rounded-lg hover:bg-indigo-50 transition-all" title="Изтегли live рапорт (PDF)"><i data-lucide="download" class="w-4 h-4"></i></button>
+                        ? `<button onclick="window.downloadLiveReport('${r.id}')" class="text-indigo-500 hover:text-indigo-700 p-2 rounded-lg hover:bg-indigo-50 transition-all" title="Изтегли live рапорт"><i data-lucide="download" class="w-4 h-4"></i></button>
                            <button onclick="window.deleteLiveReport('${r.id}')" class="text-rose-400 hover:text-rose-600 p-2 rounded-lg hover:bg-rose-50 transition-all" title="Изтрий live рапорт"><i data-lucide="trash-2" class="w-4 h-4"></i></button>`
-                        : `<button onclick="window.downloadSoloResult('${r.id}')" class="text-indigo-500 hover:text-indigo-700 p-2 rounded-lg hover:bg-indigo-50 transition-all" title="Изтегли резултат (PDF)"><i data-lucide="download" class="w-4 h-4"></i></button>
+                        : `<button onclick="window.downloadSoloResult('${r.id}')" class="text-indigo-500 hover:text-indigo-700 p-2 rounded-lg hover:bg-indigo-50 transition-all" title="Изтегли резултат"><i data-lucide="download" class="w-4 h-4"></i></button>
                            <button onclick="window.deleteSoloResult('${r.id}')" class="text-rose-400 hover:text-rose-600 p-2 rounded-lg hover:bg-rose-50 transition-all" title="Изтрий резултат"><i data-lucide="trash-2" class="w-4 h-4"></i></button>`}
                 </div>
             </td>
@@ -1092,6 +1110,9 @@ function renderHostDashboard() {
         : '';
 
     document.getElementById('host-results-body').innerHTML = rowsHtml + toggleRow;
+    if (window.lucide) lucide.createIcons();
+}
+
     renderHostLiveVisualizations(leaderboard, quizQuestions);
     if (window.lucide) lucide.createIcons();
 }
@@ -2765,7 +2786,7 @@ window.openAdminPanel = async function() {
     const myProfileRef = doc(db, 'artifacts', finalAppId, 'users', user.uid, 'settings', 'profile');
     const myProfileSnap = await getDoc(myProfileRef);
     const myAccessLevel = myProfileSnap.exists() ? (myProfileSnap.data().accessLevel || 'full') : 'full';
-    if (myAccessLevel !== 'admin' && user.uid !== ADMIN_UID) {
+    if (myAccessLevel !== 'admin') {
       return window.showMessage("Нямате администраторски достъп.", "error");
     }
 
@@ -2817,7 +2838,7 @@ window.openAdminPanel = async function() {
   } catch (error) {
     console.error("Admin panel error:", error);
     if (error?.code === 'permission-denied' || String(error?.message || '').includes('Missing or insufficient permissions')) {
-      window.showMessage(`❌ Липсват Firestore права за admin panel. Нужна е корекция на Security Rules. За проекта "${firebaseConfig.projectId}" изпълнете: firebase use ${firebaseConfig.projectId} && firebase deploy --only firestore:rules`, "error");
+      window.showMessage("❌ Липсват Firestore права за admin panel. Нужна е корекция на Security Rules за четене/писане на users/*/settings/profile от admin.", "error");
       return;
     }
     window.showMessage("❌ Грешка: " + (error.message || "Нямате права"), "error");
