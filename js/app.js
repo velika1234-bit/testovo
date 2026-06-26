@@ -338,12 +338,19 @@ window.switchScreen = (name) => {
     window.scrollTo(0, 0);
 };
 
+const escapeHTML = (value) => String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+
 window.showMessage = (text, type = 'info') => {
     const container = document.getElementById('msg-container');
     if (!container) return;
     const msg = document.createElement('div');
     msg.className = `p-4 rounded-2xl shadow-2xl font-black text-white animate-pop mb-3 flex items-center gap-3 ${type === 'error' ? 'bg-rose-500' : 'bg-indigo-600'}`;
-    msg.innerHTML = `<i data-lucide="${type === 'error' ? 'alert-circle' : 'info'}" class="w-5 h-5"></i><span>${text}</span>`;
+    msg.innerHTML = `<i data-lucide="${type === 'error' ? 'alert-circle' : 'info'}" class="w-5 h-5"></i><span>${escapeHTML(text)}</span>`;
     container.appendChild(msg);
     if (window.lucide) lucide.createIcons();
     setTimeout(() => {
@@ -637,16 +644,8 @@ window.deleteLiveReport = async (id) => {
     }
 };
 
-const downloadJsonFile = (fileName, payload) => {
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+// Merge-note: keep PDF report downloads here (not JSON). Teachers need readable reports,
+// while analyticsRows keeps the live class-by-question summary available after the session.
 const withPdfDoc = (onReady) => {
     const JsPdfCtor = window.jspdf?.jsPDF || window.jsPDF;
     if (!JsPdfCtor) {
@@ -684,6 +683,7 @@ const saveSoloResultPdf = (item, stamp) => {
 
 const saveLiveReportPdf = (item, stamp) => {
     const summary = item?.analyticsSummary || {};
+    const analyticsRows = Array.isArray(item?.analyticsRows) ? item.analyticsRows : [];
     const participants = Array.isArray(item?.participants) ? item.participants : [];
     const sortedParticipants = [...participants].sort((a, b) => (b?.score || 0) - (a?.score || 0));
     const doc = withPdfDoc((pdf) => {
@@ -717,12 +717,32 @@ const saveLiveReportPdf = (item, stamp) => {
                 body: tableRows.length ? tableRows : [['-', 'Няма данни', '-', '-', '-']],
                 styles: { fontSize: 9 }
             });
+            if (analyticsRows.length) {
+                pdf.autoTable({
+                    startY: pdf.lastAutoTable.finalY + 18,
+                    head: [['Въпрос', 'Верни', 'Грешни', 'Без отг.', 'Активност']],
+                    body: analyticsRows.map((row) => [
+                        `В${(row.qIdx ?? 0) + 1}`,
+                        row.correct ?? 0,
+                        row.wrong ?? 0,
+                        row.missing ?? 0,
+                        `${row.responseRatePct ?? 0}%`
+                    ]),
+                    styles: { fontSize: 8 }
+                });
+            }
         } else {
             pdf.setFontSize(10);
             pdf.text('Участници:', 40, y + 14);
             tableRows.slice(0, 18).forEach((row, index) => {
                 pdf.text(`${row[0]}. ${row[1]} - ${row[2]}т., ${row[3]}, ${row[4]}`, 40, y + 32 + (index * 13));
             });
+            if (analyticsRows.length) {
+                pdf.text('Клас по въпроси:', 40, y + 280);
+                analyticsRows.slice(0, 12).forEach((row, index) => {
+                    pdf.text(`В${(row.qIdx ?? 0) + 1}: В ${row.correct ?? 0}, Г ${row.wrong ?? 0}, Без ${row.missing ?? 0}`, 40, y + 298 + (index * 13));
+                });
+            }
         }
     });
     if (!doc) return;
@@ -732,23 +752,15 @@ const saveLiveReportPdf = (item, stamp) => {
 window.downloadSoloResult = (id) => {
     const item = soloResults.find((r) => r.id === id);
     if (!item) return window.showMessage("Записът не е намерен.", "error");
-    const payload = {
-        type: 'solo',
-        studentName: item.studentName || '-',
-        quizTitle: item.quizTitle || '-',
-        score: item.score || '-',
-        timestamp: item.timestamp || null,
-        exportedAt: new Date().toISOString()
-    };
     const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
-    downloadJsonFile(`solo_result_${item.id}_${stamp}.json`, payload);
+    saveSoloResultPdf(item, stamp);
 };
 
 window.downloadLiveReport = (id) => {
     const item = liveReports.find((r) => r.id === id);
     if (!item) return window.showMessage("Рапортът не е намерен.", "error");
     const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
-    downloadJsonFile(`live_report_${item.sessionId || item.id}_${stamp}.json`, item);
+    saveLiveReportPdf(item, stamp);
 };
 
 window.setResultsFilter = (filterValue) => {
@@ -830,9 +842,9 @@ function renderSoloResults() {
             <td class="py-3 px-4 text-center">
                 <div class="flex items-center justify-center gap-1">
                     ${r._kind === 'live'
-                        ? `<button onclick="window.downloadLiveReport('${r.id}')" class="text-indigo-500 hover:text-indigo-700 p-2 rounded-lg hover:bg-indigo-50 transition-all" title="Изтегли live рапорт"><i data-lucide="download" class="w-4 h-4"></i></button>
+                        ? `<button onclick="window.downloadLiveReport('${r.id}')" class="text-indigo-500 hover:text-indigo-700 p-2 rounded-lg hover:bg-indigo-50 transition-all" title="Изтегли live рапорт (PDF)"><i data-lucide="download" class="w-4 h-4"></i></button>
                            <button onclick="window.deleteLiveReport('${r.id}')" class="text-rose-400 hover:text-rose-600 p-2 rounded-lg hover:bg-rose-50 transition-all" title="Изтрий live рапорт"><i data-lucide="trash-2" class="w-4 h-4"></i></button>`
-                        : `<button onclick="window.downloadSoloResult('${r.id}')" class="text-indigo-500 hover:text-indigo-700 p-2 rounded-lg hover:bg-indigo-50 transition-all" title="Изтегли резултат"><i data-lucide="download" class="w-4 h-4"></i></button>
+                        : `<button onclick="window.downloadSoloResult('${r.id}')" class="text-indigo-500 hover:text-indigo-700 p-2 rounded-lg hover:bg-indigo-50 transition-all" title="Изтегли резултат (PDF)"><i data-lucide="download" class="w-4 h-4"></i></button>
                            <button onclick="window.deleteSoloResult('${r.id}')" class="text-rose-400 hover:text-rose-600 p-2 rounded-lg hover:bg-rose-50 transition-all" title="Изтрий резултат"><i data-lucide="trash-2" class="w-4 h-4"></i></button>`}
                 </div>
             </td>
@@ -1110,9 +1122,6 @@ function renderHostDashboard() {
         : '';
 
     document.getElementById('host-results-body').innerHTML = rowsHtml + toggleRow;
-    if (window.lucide) lucide.createIcons();
-}
-
     renderHostLiveVisualizations(leaderboard, quizQuestions);
     if (window.lucide) lucide.createIcons();
 }
@@ -1128,7 +1137,7 @@ function renderHostLiveVisualizations(leaderboard, quizQuestions) {
     classContainer.innerHTML = rows.length
         ? rows.map((r) => `
             <div class="bg-slate-50 rounded-xl p-2 border">
-                <div class="text-[10px] font-black text-slate-700 mb-1">В${r.qIdx + 1}: ${r.questionText || '-'}</div>
+                <div class="text-[10px] font-black text-slate-700 mb-1">В${r.qIdx + 1}: ${escapeHTML(r.questionText || '-')}</div>
                 <div class="w-full h-2 bg-slate-200 rounded-full overflow-hidden flex">
                     <div class="h-full bg-emerald-500" style="width:${Math.max(0, Math.min(100, r.classCorrectPct || 0))}%"></div>
                     <div class="h-full bg-rose-300" style="width:${Math.max(0, Math.min(100, r.classWrongPct || 0))}%"></div>
@@ -1142,7 +1151,7 @@ function renderHostLiveVisualizations(leaderboard, quizQuestions) {
 
     const selectedId = studentSelect.value;
     studentSelect.innerHTML = leaderboard.length
-        ? leaderboard.map((p) => `<option value="${p.id}">${p.name || 'Участник'}</option>`).join('')
+        ? leaderboard.map((p) => `<option value="${escapeHTML(p.id)}">${escapeHTML(p.name || 'Участник')}</option>`).join('')
         : '<option value="">Няма участници</option>';
     if (selectedId && leaderboard.some((p) => p.id === selectedId)) {
         studentSelect.value = selectedId;
@@ -1163,7 +1172,7 @@ function renderHostLiveVisualizations(leaderboard, quizQuestions) {
                 ? 'bg-emerald-100 text-emerald-700'
                 : (answer === false ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-500');
             return `<div class="flex items-center justify-between gap-2 text-[10px] border rounded-lg px-2 py-1">
-                <span class="truncate font-black text-slate-700">В${idx + 1}. ${q?.text || '-'}</span>
+                <span class="truncate font-black text-slate-700">В${idx + 1}. ${escapeHTML(q?.text || '-')}</span>
                 <span class="px-2 py-0.5 rounded-md font-black ${statusClass}">${status}</span>
             </div>`;
         }).join('') || '<div class="text-[10px] text-slate-400 italic">Няма въпроси.</div>';
@@ -1194,6 +1203,7 @@ window.finishLiveSession = async () => {
                 participantsCount: analytics.summary?.participantsCount ?? lastFetchedParticipants.length,
                 scoreLabel: `${analytics.summary?.totalCorrect ?? 0}/${analytics.summary?.totalAnswered ?? 0}`,
                 analyticsSummary: analytics.summary || null,
+                analyticsRows: analytics.rows || [],
                 highlights,
                 participants: lastFetchedParticipants.map((p) => ({
                     id: p.id || '',
@@ -1904,14 +1914,14 @@ window.renderLiveQuestionUI = (q) => {
     if (q.type === 'single') {
         const shuffledSingle = getShuffledOptionEntries(q.options);
         container.innerHTML = shuffledSingle.map((item) => `
-            <button onclick="window.selectLiveOption(this, ${item.originalIndex})" class="client-opt-btn w-full p-4 text-left bg-slate-50 border-2 border-slate-100 rounded-2xl font-black text-slate-800 shadow-sm hover:border-indigo-300 transition-all text-sm mb-2">${item.label}</button>
+            <button onclick="window.selectLiveOption(this, ${item.originalIndex})" class="client-opt-btn w-full p-4 text-left bg-slate-50 border-2 border-slate-100 rounded-2xl font-black text-slate-800 shadow-sm hover:border-indigo-300 transition-all text-sm mb-2">${escapeHTML(item.label)}</button>
         `).join('') + btnHtml;
         document.getElementById('btn-submit-live-unified').onclick = window.submitLiveSingleConfirm;
     } else if (q.type === 'multiple') {
         const shuffledMultiple = getShuffledOptionEntries(q.options);
         container.innerHTML = shuffledMultiple.map((item) => `
             <label class="flex items-center gap-4 w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl font-black text-slate-800 cursor-pointer text-sm mb-2">
-                <input type="checkbox" name="c-multiple" value="${item.originalIndex}" class="w-6 h-6" onchange="window.selectLiveMultiple()"> ${item.label}
+                <input type="checkbox" name="c-multiple" value="${item.originalIndex}" class="w-6 h-6" onchange="window.selectLiveMultiple()"> ${escapeHTML(item.label)}
             </label>
         `).join('') + btnHtml;
         document.getElementById('btn-submit-live-unified').onclick = window.submitLiveMultipleConfirm;
@@ -2178,11 +2188,11 @@ window.triggerSoloQuestion = (q) => {
     if (q.type === 'single') {
         window.soloPendingAnswer = null;
         const shuffledSingle = getShuffledOptionEntries(q.options);
-        container.innerHTML = shuffledSingle.map((item) => `<button onclick="window.selectSoloPending(${item.originalIndex}, this)" class="solo-choice w-full p-4 text-left bg-white/10 border border-white/20 rounded-2xl font-black text-white hover:bg-white/20 transition-all text-sm">${item.label}</button>`).join('')
+        container.innerHTML = shuffledSingle.map((item) => `<button onclick="window.selectSoloPending(${item.originalIndex}, this)" class="solo-choice w-full p-4 text-left bg-white/10 border border-white/20 rounded-2xl font-black text-white hover:bg-white/20 transition-all text-sm">${escapeHTML(item.label)}</button>`).join('')
             + `<button id="solo-confirm-btn" onclick="window.confirmSoloPending()" class="w-full mt-4 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs opacity-60 pointer-events-none">Потвърди избора</button>`;
     } else if (q.type === 'multiple') {
         const shuffledMultiple = getShuffledOptionEntries(q.options);
-        container.innerHTML = shuffledMultiple.map((item) => `<label class="flex items-center gap-4 w-full p-4 bg-white/10 border border-white/20 rounded-2xl font-black text-white cursor-pointer text-sm mb-2"><input type="checkbox" name="s-multiple" value="${item.originalIndex}" class="w-5 h-5"> ${item.label}</label>`).join('') + `<button onclick="window.submitSoloMultiple()" class="w-full mt-4 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs">Изпрати</button>`;
+        container.innerHTML = shuffledMultiple.map((item) => `<label class="flex items-center gap-4 w-full p-4 bg-white/10 border border-white/20 rounded-2xl font-black text-white cursor-pointer text-sm mb-2"><input type="checkbox" name="s-multiple" value="${item.originalIndex}" class="w-5 h-5"> ${escapeHTML(item.label)}</label>`).join('') + `<button onclick="window.submitSoloMultiple()" class="w-full mt-4 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs">Изпрати</button>`;
     } else if (q.type === 'boolean') {
         window.soloPendingAnswer = null;
         container.innerHTML = `<div class="grid grid-cols-2 gap-4">
@@ -2786,7 +2796,7 @@ window.openAdminPanel = async function() {
     const myProfileRef = doc(db, 'artifacts', finalAppId, 'users', user.uid, 'settings', 'profile');
     const myProfileSnap = await getDoc(myProfileRef);
     const myAccessLevel = myProfileSnap.exists() ? (myProfileSnap.data().accessLevel || 'full') : 'full';
-    if (myAccessLevel !== 'admin') {
+    if (myAccessLevel !== 'admin' && user.uid !== ADMIN_UID) {
       return window.showMessage("Нямате администраторски достъп.", "error");
     }
 
@@ -2838,7 +2848,7 @@ window.openAdminPanel = async function() {
   } catch (error) {
     console.error("Admin panel error:", error);
     if (error?.code === 'permission-denied' || String(error?.message || '').includes('Missing or insufficient permissions')) {
-      window.showMessage("❌ Липсват Firestore права за admin panel. Нужна е корекция на Security Rules за четене/писане на users/*/settings/profile от admin.", "error");
+      window.showMessage(`❌ Липсват Firestore права за admin panel. Нужна е корекция на Security Rules. За проекта "${firebaseConfig.projectId}" изпълнете: firebase use ${firebaseConfig.projectId} && firebase deploy --only firestore:rules`, "error");
       return;
     }
     window.showMessage("❌ Грешка: " + (error.message || "Нямате права"), "error");
