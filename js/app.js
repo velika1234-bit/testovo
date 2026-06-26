@@ -36,6 +36,7 @@ let isTeacher = false;
 let editingQuizId = null;
 let editingQuestionIndex = null;
 const MASTER_TEACHER_CODE = "vilidaf76";
+const ADMIN_UID = 'uNdGTBsgatZX4uOPTZqKG9qLJVZ2';
 
 let player, solvePlayer, hostPlayer;
 let questions = [], currentQuiz = null, studentNameValue = "";
@@ -172,15 +173,14 @@ onAuthStateChanged(auth, async (u) => {
         if (document.getElementById('my-quizzes-list')) renderMyQuizzes();
         if (document.getElementById('solo-results-body')) renderSoloResults();
         // --- ПОКАЗВАНЕ НА АДМИН БУТОН (само за администратор) ---
-const ADMIN_UID = 'uNdGTBsgatZX4uOPTZqKG9qLJVZ2';
-const adminBtn = document.getElementById('admin-panel-btn');
-if (adminBtn) {
-  if (incomingUid === ADMIN_UID) {
-    adminBtn.classList.remove('hidden');
-  } else {
-    adminBtn.classList.add('hidden');
-  }
-}
+        const adminBtn = document.getElementById('admin-panel-btn');
+        if (adminBtn) {
+            if (incomingUid === ADMIN_UID) {
+                adminBtn.classList.remove('hidden');
+            } else {
+                adminBtn.classList.add('hidden');
+            }
+        }
     }
     lastAuthUid = incomingUid;
     user = u;
@@ -647,6 +647,86 @@ const downloadJsonFile = (fileName, payload) => {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+const withPdfDoc = (onReady) => {
+    const JsPdfCtor = window.jspdf?.jsPDF || window.jsPDF;
+    if (!JsPdfCtor) {
+        window.showMessage("PDF библиотеката не е заредена. Моля, опитайте отново.", "error");
+        return null;
+    }
+    const doc = new JsPdfCtor({ unit: 'pt', format: 'a4' });
+    doc.setFont('helvetica');
+    onReady(doc);
+    return doc;
+};
+
+const saveSoloResultPdf = (item, stamp) => {
+    const doc = withPdfDoc((pdf) => {
+        const dateText = item?.timestamp ? formatDate(item.timestamp) : '-';
+        let y = 50;
+        pdf.setFontSize(16);
+        pdf.text('VideoQuiz - Индивидуален рапорт', 40, y);
+        y += 24;
+        pdf.setFontSize(11);
+        [
+            `Ученик: ${item?.studentName || '-'}`,
+            `Урок: ${item?.quizTitle || '-'}`,
+            `Резултат: ${item?.score || '-'}`,
+            `Дата на опит: ${dateText}`,
+            `Експортирано: ${formatDate(Date.now())}`
+        ].forEach((line) => {
+            pdf.text(line, 40, y);
+            y += 18;
+        });
+    });
+    if (!doc) return;
+    doc.save(`solo_result_${item.id}_${stamp}.pdf`);
+};
+
+const saveLiveReportPdf = (item, stamp) => {
+    const summary = item?.analyticsSummary || {};
+    const participants = Array.isArray(item?.participants) ? item.participants : [];
+    const sortedParticipants = [...participants].sort((a, b) => (b?.score || 0) - (a?.score || 0));
+    const doc = withPdfDoc((pdf) => {
+        pdf.setFontSize(16);
+        pdf.text(`VideoQuiz - Live рапорт (${item?.sessionId || '-'})`, 40, 50);
+        pdf.setFontSize(10);
+        const topInfo = [
+            `Урок: ${item?.quizTitle || '-'}`,
+            `Дата: ${item?.timestampMs ? formatDate(item.timestampMs) : '-'}`,
+            `Участници: ${item?.participantsCount || 0}`,
+            `Резултат клас: ${item?.scoreLabel || '-'}`,
+            `Покритие: ${summary?.answerCoveragePct ?? 0}%`,
+            `Верни отговори (клас): ${summary?.classCorrectPct ?? 0}%`
+        ];
+        let y = 72;
+        topInfo.forEach((line) => {
+            pdf.text(line, 40, y);
+            y += 14;
+        });
+
+        const tableRows = sortedParticipants.map((p, idx) => {
+            const answersCount = Object.values(p?.answers || {}).filter((v) => v === true || v === false).length;
+            const correctCount = Object.values(p?.answers || {}).filter((v) => v === true).length;
+            const accuracy = answersCount > 0 ? Math.round((correctCount / answersCount) * 100) : 0;
+            return [idx + 1, p?.name || 'Участник', p?.score || 0, `${correctCount}/${answersCount}`, `${accuracy}%`];
+        });
+        if (typeof pdf.autoTable === 'function') {
+            pdf.autoTable({
+                startY: y + 8,
+                head: [['#', 'Участник', 'Точки', 'Верни/Отговорени', 'Точност']],
+                body: tableRows.length ? tableRows : [['-', 'Няма данни', '-', '-', '-']],
+                styles: { fontSize: 9 }
+            });
+        } else {
+            pdf.setFontSize(10);
+            pdf.text('Участници:', 40, y + 14);
+            tableRows.slice(0, 18).forEach((row, index) => {
+                pdf.text(`${row[0]}. ${row[1]} - ${row[2]}т., ${row[3]}, ${row[4]}`, 40, y + 32 + (index * 13));
+            });
+        }
+    });
+    if (!doc) return;
+    doc.save(`live_report_${item.sessionId || item.id}_${stamp}.pdf`);
 };
 
 window.downloadSoloResult = (id) => {
@@ -1031,6 +1111,69 @@ function renderHostDashboard() {
 
     document.getElementById('host-results-body').innerHTML = rowsHtml + toggleRow;
     if (window.lucide) lucide.createIcons();
+}
+
+    renderHostLiveVisualizations(leaderboard, quizQuestions);
+    if (window.lucide) lucide.createIcons();
+}
+
+function renderHostLiveVisualizations(leaderboard, quizQuestions) {
+    const classContainer = document.getElementById('host-question-visualization');
+    const studentSelect = document.getElementById('host-student-visual-select');
+    const studentContainer = document.getElementById('host-student-visualization');
+    if (!classContainer || !studentSelect || !studentContainer) return;
+
+    const analytics = getClassQuestionStats();
+    const rows = analytics?.rows || [];
+    classContainer.innerHTML = rows.length
+        ? rows.map((r) => `
+            <div class="bg-slate-50 rounded-xl p-2 border">
+                <div class="text-[10px] font-black text-slate-700 mb-1">В${r.qIdx + 1}: ${r.questionText || '-'}</div>
+                <div class="w-full h-2 bg-slate-200 rounded-full overflow-hidden flex">
+                    <div class="h-full bg-emerald-500" style="width:${Math.max(0, Math.min(100, r.classCorrectPct || 0))}%"></div>
+                    <div class="h-full bg-rose-300" style="width:${Math.max(0, Math.min(100, r.classWrongPct || 0))}%"></div>
+                </div>
+                <div class="mt-1 text-[10px] text-slate-500 font-bold">
+                    Верни: ${r.correct} · Грешни: ${r.wrong} · Без отговор: ${r.missing}
+                </div>
+            </div>
+        `).join('')
+        : '<div class="text-[10px] text-slate-400 italic">Няма данни за визуализация.</div>';
+
+    const selectedId = studentSelect.value;
+    studentSelect.innerHTML = leaderboard.length
+        ? leaderboard.map((p) => `<option value="${p.id}">${p.name || 'Участник'}</option>`).join('')
+        : '<option value="">Няма участници</option>';
+    if (selectedId && leaderboard.some((p) => p.id === selectedId)) {
+        studentSelect.value = selectedId;
+    }
+
+    const renderSelectedStudent = () => {
+        const selected = leaderboard.find((p) => p.id === studentSelect.value) || leaderboard[0];
+        if (!selected) {
+            studentContainer.innerHTML = '<div class="text-[10px] text-slate-400 italic">Няма ученик за преглед.</div>';
+            return;
+        }
+        const answers = selected.answers || {};
+        studentContainer.innerHTML = (quizQuestions || []).map((q, idx) => {
+            let answer = answers[idx];
+            if (answer === undefined) answer = answers[String(idx)];
+            const status = answer === true ? 'Верен' : (answer === false ? 'Грешен' : 'Без отговор');
+            const statusClass = answer === true
+                ? 'bg-emerald-100 text-emerald-700'
+                : (answer === false ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-500');
+            return `<div class="flex items-center justify-between gap-2 text-[10px] border rounded-lg px-2 py-1">
+                <span class="truncate font-black text-slate-700">В${idx + 1}. ${q?.text || '-'}</span>
+                <span class="px-2 py-0.5 rounded-md font-black ${statusClass}">${status}</span>
+            </div>`;
+        }).join('') || '<div class="text-[10px] text-slate-400 italic">Няма въпроси.</div>';
+    };
+
+    if (!studentSelect.dataset.boundChange) {
+        studentSelect.addEventListener('change', renderSelectedStudent);
+        studentSelect.dataset.boundChange = '1';
+    }
+    renderSelectedStudent();
 }
 
 window.toggleHostLeaderboard = () => {
@@ -1759,14 +1902,16 @@ window.renderLiveQuestionUI = (q) => {
     </div>`;
 
     if (q.type === 'single') {
-        container.innerHTML = q.options.map((o, i) => `
-            <button onclick="window.selectLiveOption(this, ${i})" class="client-opt-btn w-full p-4 text-left bg-slate-50 border-2 border-slate-100 rounded-2xl font-black text-slate-800 shadow-sm hover:border-indigo-300 transition-all text-sm mb-2">${o}</button>
+        const shuffledSingle = getShuffledOptionEntries(q.options);
+        container.innerHTML = shuffledSingle.map((item) => `
+            <button onclick="window.selectLiveOption(this, ${item.originalIndex})" class="client-opt-btn w-full p-4 text-left bg-slate-50 border-2 border-slate-100 rounded-2xl font-black text-slate-800 shadow-sm hover:border-indigo-300 transition-all text-sm mb-2">${item.label}</button>
         `).join('') + btnHtml;
         document.getElementById('btn-submit-live-unified').onclick = window.submitLiveSingleConfirm;
     } else if (q.type === 'multiple') {
-        container.innerHTML = q.options.map((o, i) => `
+        const shuffledMultiple = getShuffledOptionEntries(q.options);
+        container.innerHTML = shuffledMultiple.map((item) => `
             <label class="flex items-center gap-4 w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl font-black text-slate-800 cursor-pointer text-sm mb-2">
-                <input type="checkbox" name="c-multiple" value="${i}" class="w-6 h-6" onchange="window.selectLiveMultiple()"> ${o}
+                <input type="checkbox" name="c-multiple" value="${item.originalIndex}" class="w-6 h-6" onchange="window.selectLiveMultiple()"> ${item.label}
             </label>
         `).join('') + btnHtml;
         document.getElementById('btn-submit-live-unified').onclick = window.submitLiveMultipleConfirm;
@@ -1914,6 +2059,11 @@ const readQuestionWithSpeech = (text) => {
     }
 };
 
+const getShuffledOptionEntries = (options = []) =>
+    options
+        .map((label, originalIndex) => ({ label, originalIndex }))
+        .sort(() => Math.random() - 0.5);
+
 // --- SOLO LOGIC ---
 window.startIndividual = async () => {
     const pinCode = document.getElementById('ind-quiz-code').value.trim();
@@ -2027,10 +2177,12 @@ window.triggerSoloQuestion = (q) => {
 
     if (q.type === 'single') {
         window.soloPendingAnswer = null;
-        container.innerHTML = q.options.map((o, i) => `<button onclick="window.selectSoloPending(${i}, this)" class="solo-choice w-full p-4 text-left bg-white/10 border border-white/20 rounded-2xl font-black text-white hover:bg-white/20 transition-all text-sm">${o}</button>`).join('')
+        const shuffledSingle = getShuffledOptionEntries(q.options);
+        container.innerHTML = shuffledSingle.map((item) => `<button onclick="window.selectSoloPending(${item.originalIndex}, this)" class="solo-choice w-full p-4 text-left bg-white/10 border border-white/20 rounded-2xl font-black text-white hover:bg-white/20 transition-all text-sm">${item.label}</button>`).join('')
             + `<button id="solo-confirm-btn" onclick="window.confirmSoloPending()" class="w-full mt-4 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs opacity-60 pointer-events-none">Потвърди избора</button>`;
     } else if (q.type === 'multiple') {
-        container.innerHTML = q.options.map((o, i) => `<label class="flex items-center gap-4 w-full p-4 bg-white/10 border border-white/20 rounded-2xl font-black text-white cursor-pointer text-sm mb-2"><input type="checkbox" name="s-multiple" value="${i}" class="w-5 h-5"> ${o}</label>`).join('') + `<button onclick="window.submitSoloMultiple()" class="w-full mt-4 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs">Изпрати</button>`;
+        const shuffledMultiple = getShuffledOptionEntries(q.options);
+        container.innerHTML = shuffledMultiple.map((item) => `<label class="flex items-center gap-4 w-full p-4 bg-white/10 border border-white/20 rounded-2xl font-black text-white cursor-pointer text-sm mb-2"><input type="checkbox" name="s-multiple" value="${item.originalIndex}" class="w-5 h-5"> ${item.label}</label>`).join('') + `<button onclick="window.submitSoloMultiple()" class="w-full mt-4 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs">Изпрати</button>`;
     } else if (q.type === 'boolean') {
         window.soloPendingAnswer = null;
         container.innerHTML = `<div class="grid grid-cols-2 gap-4">
